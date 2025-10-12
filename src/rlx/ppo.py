@@ -26,7 +26,17 @@ from flax import nnx
 import optax
 import distrax
 from omegaconf import DictConfig, OmegaConf
+import orbax.checkpoint as ocp
+import os
+from pathlib import Path
 
+# Set GPU parameters
+xla_flags = os.environ.get("XLA_FLAGS", "")
+xla_flags += " --xla_gpu_triton_gemm_any=True"
+os.environ["XLA_FLAGS"] = xla_flags
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["MUJOCO_GL"] = "egl"
+jax.config.update("jax_default_matmul_precision", "highest")
 
 # ---------------------------
 # Configuration
@@ -45,7 +55,9 @@ class PPOConfig:
 
     # PPO hyperparameters
     learning_rate: float = 2.5e-4
-    anneal_lr: bool = True  # Anneal learning rate linearly
+    anneal_lr: bool = True  # Anneal learning rate
+    lr_schedule_type: str = "linear"  # linear, exponential, constant
+    decay_rate: float = 0.99  # for exponential decay
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_coef: float = 0.2
@@ -68,6 +80,13 @@ class PPOConfig:
     # Logging
     log_frequency: int = 10  # log every N updates
     seed: int = 42
+
+    # Checkpointing
+    save_model: bool = True  # Save model checkpoints
+    checkpoint_dir: str = "checkpoints"  # Directory to save checkpoints
+    checkpoint_frequency: int = 100  # Save checkpoint every N updates
+    keep_checkpoints: int = 3  # Number of checkpoints to keep
+    resume_from: str | None = None  # Path to checkpoint directory to resume from
 
     def __post_init__(self):
         if self.hidden_sizes is None:
@@ -400,6 +419,63 @@ def train_step(
 
 
 # ---------------------------
+# Checkpoint utilities
+# ---------------------------
+def load_checkpoint(
+    checkpoint_path: str,
+    model: ActorCritic,
+    optimizer: nnx.Optimizer,
+) -> tuple[int, int, jax.Array]:
+    """
+    Load a checkpoint and restore model and optimizer state.
+    
+    Returns:
+        global_step: Global step count
+        num_updates: Number of updates completed
+        rng_key: RNG key state
+    """
+    checkpoint_manager = ocp.CheckpointManager(
+        directory=str(Path(checkpoint_path).resolve()),
+        options=ocp.CheckpointManagerOptions(create=False),
+    )
+    
+    # Get the latest checkpoint
+    latest_step = checkpoint_manager.latest_step()
+    if latest_step is None:
+        raise ValueError(f"No checkpoints found in {checkpoint_path}")
+    
+    # Load checkpoint using new API - provide target structure
+    # First get a template of the current model state structure
+    template_state = nnx.state(model)
+    
+    # Create the target structure for restoration
+    target_checkpoint = {
+        'model_state': template_state,
+        'global_step': 0,
+        'num_updates': 0,
+        'rng_key': jax.random.key(0),
+    }
+    
+    checkpoint_state = checkpoint_manager.restore(
+        latest_step, 
+        args=ocp.args.StandardRestore(target_checkpoint)
+    )
+    
+    # Restore model state (optimizer will be recreated)
+    nnx.update(model, checkpoint_state['model_state'])
+    
+    print(f"Loaded checkpoint from step {latest_step}")
+    print(f"  Global step: {checkpoint_state['global_step']}")
+    print(f"  Updates: {checkpoint_state['num_updates']}")
+    
+    return (
+        checkpoint_state['global_step'],
+        checkpoint_state['num_updates'], 
+        checkpoint_state['rng_key']
+    )
+
+
+# ---------------------------
 # Main training loop
 # ---------------------------
 def train(cfg: PPOConfig):
@@ -426,7 +502,7 @@ def train(cfg: PPOConfig):
     if cfg.norm_reward:
         envs = gym.wrappers.vector.NormalizeReward(envs, gamma=cfg.gamma)
         envs = gym.wrappers.vector.ClipReward(envs, min_reward=-cfg.clip_reward, max_reward=cfg.clip_reward)
-
+   
     # Initialize model
     obs_shape = envs.single_observation_space.shape
     action_space = envs.single_action_space
@@ -441,17 +517,45 @@ def train(cfg: PPOConfig):
 
     # Create learning rate schedule
     if cfg.anneal_lr:
-        # Linear annealing from initial LR to 0
-        lr_schedule = optax.linear_schedule(
-            init_value=cfg.learning_rate,
-            end_value=0.0,
-            transition_steps=cfg.num_iterations * cfg.update_epochs * cfg.num_minibatches,
-        )
+        total_steps = cfg.num_iterations * cfg.update_epochs * cfg.num_minibatches
+        
+        if cfg.lr_schedule_type == "linear":
+            lr_schedule = optax.linear_schedule(
+                init_value=cfg.learning_rate,
+                end_value=0.0,
+                transition_steps=total_steps,
+            )
+        elif cfg.lr_schedule_type == "exponential":
+            lr_schedule = optax.exponential_decay(
+                init_value=cfg.learning_rate,
+                transition_steps=total_steps,
+                decay_rate=cfg.decay_rate,
+                alpha=0.0,  # Final learning rate as fraction of initial
+            )
+        elif cfg.lr_schedule_type == "constant":
+            lr_schedule = optax.constant_schedule(cfg.learning_rate)
+        else:
+            raise ValueError(f"Unknown lr_schedule_type: {cfg.lr_schedule_type}")
     else:
-        lr_schedule = cfg.learning_rate
+        lr_schedule = optax.constant_schedule(cfg.learning_rate)
 
     # Initialize optimizer with schedule
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=lr_schedule), wrt=nnx.Param)
+
+    # Setup checkpointing
+    checkpoint_manager = None
+    if cfg.save_model:
+        checkpoint_dir = Path(cfg.checkpoint_dir).resolve() / f"{cfg.env_id}-{cfg.seed}"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create checkpoint manager using new API
+        checkpoint_manager = ocp.CheckpointManager(
+            directory=str(checkpoint_dir),  # Ensure absolute path as string
+            options=ocp.CheckpointManagerOptions(
+                max_to_keep=cfg.keep_checkpoints,
+                create=True,
+            ),
+        )
 
     # Initialize wandb
     wandb.init(
@@ -464,6 +568,12 @@ def train(cfg: PPOConfig):
     obs, _ = envs.reset(seed=cfg.seed)
     global_step = 0
     num_updates = 0
+
+    # Resume from checkpoint if specified
+    if cfg.resume_from is not None:
+        global_step, num_updates, key = load_checkpoint(
+            cfg.resume_from, model, optimizer
+        )
 
     # Storage for rollouts
     rollout_obs = np.zeros((cfg.num_steps, cfg.num_envs) + obs_shape, dtype=np.float32)
@@ -601,12 +711,9 @@ def train(cfg: PPOConfig):
         if num_updates % cfg.log_frequency == 0:
             sps = int(global_step / (time.time() - start_time))
 
-            # Get current learning rate
-            if cfg.anneal_lr:
-                current_step = num_updates * cfg.update_epochs * cfg.num_minibatches
-                current_lr = lr_schedule(current_step)
-            else:
-                current_lr = cfg.learning_rate
+            # Get current learning rate from scheduler
+            current_step = num_updates * cfg.update_epochs * cfg.num_minibatches
+            current_lr = lr_schedule(current_step)
 
             log_dict = {
                 "global_step": global_step,
@@ -633,6 +740,45 @@ def train(cfg: PPOConfig):
                     f"  Episode Return: {log_dict['episode/return_mean']:.2f} ± {log_dict['episode/return_std']:.2f}"
                 )
 
+        # Save checkpoint periodically
+        if cfg.save_model and checkpoint_manager is not None and num_updates % cfg.checkpoint_frequency == 0:
+            # Create checkpoint state
+            checkpoint_state = {
+                'model_state': nnx.state(model),
+                'global_step': global_step,
+                'num_updates': num_updates,
+                'rng_key': key,
+            }
+            
+            checkpoint_manager.save(
+                step=num_updates,
+                args=ocp.args.StandardSave(checkpoint_state),
+                metrics={'global_step': global_step, 'episode_return': log_dict.get('episode/return_mean', 0.0)}
+            )
+            # Wait for checkpoint to finalize
+            checkpoint_manager.wait_until_finished()
+            print(f"Saved checkpoint at update {num_updates}")
+
+    # Save final checkpoint
+    if cfg.save_model and checkpoint_manager is not None:
+        final_checkpoint_state = {
+            'model_state': nnx.state(model),
+            'global_step': global_step,
+            'num_updates': num_updates,
+            'rng_key': key,
+        }
+        
+        checkpoint_manager.save(
+            step=num_updates,
+            args=ocp.args.StandardSave(final_checkpoint_state),
+            metrics={'global_step': global_step, 'final': True}
+        )
+        print(f"Saved final checkpoint at update {num_updates}")
+        
+        # Wait for checkpoint to finalize and close
+        checkpoint_manager.wait_until_finished()
+        checkpoint_manager.close()
+
     envs.close()
     wandb.finish()
 
@@ -642,7 +788,7 @@ def train(cfg: PPOConfig):
 # ---------------------------
 # Hydra entry point
 # ---------------------------
-@hydra.main(version_base=None, config_path="configs", config_name="train_ppo_nnx")
+@hydra.main(version_base=None, config_path="../configs", config_name="ppo")
 def main(cfg: DictConfig):
     """Main entry point."""
     # Convert OmegaConf to dataclass

@@ -1,8 +1,16 @@
 # PPO NNX Configuration
+defaults:
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+ 
+hydra:
+  run:
+    dir: .
+  output_subdir: null
 
 # Environment
 env_id: "CartPole-v1"  # Try: "CartPole-v1", "LunarLander-v3", "HalfCheetah-v5"
-num_envs: 8
+num_envs: 16
 
 # Training
 total_timesteps: 10000000
@@ -12,6 +20,9 @@ update_epochs: 10
 
 # PPO hyperparameters (tuned from Stable-Baselines3 and CleanRL)
 learning_rate: 3e-4
+anneal_lr: true  # Enable learning rate annealing
+lr_schedule_type: "linear"  # Options: linear, exponential, constant
+decay_rate: 0.99  # Used if lr_schedule_type is "exponential"
 gamma: 0.99
 gae_lambda: 0.95
 clip_coef: 0.2
@@ -34,3 +45,10 @@ clip_reward: 10.0  # clip normalized rewards
 # Logging
 log_frequency: 1  # log every N updates
 seed: 42
+
+# Checkpointing
+save_model: true  # save model checkpoints
+checkpoint_dir: "checkpoints"  # directory to save checkpoints
+checkpoint_frequency: 100  # save checkpoint every N updates
+keep_checkpoints: 3  # number of checkpoints to keep
+resume_from: null  # path to checkpoint directory to resume from
