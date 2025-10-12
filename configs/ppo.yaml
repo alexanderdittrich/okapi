@@ -1,0 +1,36 @@
+# PPO NNX Configuration
+
+# Environment
+env_id: "CartPole-v1"  # Try: "CartPole-v1", "LunarLander-v3", "HalfCheetah-v5"
+num_envs: 8
+
+# Training
+total_timesteps: 10000000
+num_steps: 2048  # rollout length per env
+num_minibatches: 32
+update_epochs: 10
+
+# PPO hyperparameters (tuned from Stable-Baselines3 and CleanRL)
+learning_rate: 3e-4
+gamma: 0.99
+gae_lambda: 0.95
+clip_coef: 0.2
+clip_vloss: true
+ent_coef: 0.01  # entropy
+vf_coef: 0.5    # value function
+max_grad_norm: 0.5
+target_kl: null  # set to 0.015 for early stopping based on KL divergence
+
+# Network architecture
+hidden_sizes: [64, 64]
+
+# Normalization
+norm_adv: true  # normalize advantages
+norm_obs: true  # normalize observations
+norm_reward: true  # normalize rewards
+clip_obs: 10.0  # clip normalized observations
+clip_reward: 10.0  # clip normalized rewards
+
+# Logging
+log_frequency: 1  # log every N updates
+seed: 42
