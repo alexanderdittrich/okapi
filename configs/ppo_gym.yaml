@@ -15,8 +15,8 @@ num_envs: 16
 # Training
 total_timesteps: 10000000
 num_steps: 2048  # rollout length per env
-num_minibatches: 32
-update_epochs: 10
+batch_size: 64   # minibatch size for training
+update_epochs: 10  # number epochs per update
 
 # PPO hyperparameters (tuned from Stable-Baselines3 and CleanRL)
 learning_rate: 3e-4
@@ -27,15 +27,18 @@ gamma: 0.99
 gae_lambda: 0.95
 clip_coef: 0.2
 clip_vloss: true
-ent_coef: 0.01  # entropy
+ent_coef: 0.01  # 0.01 for more exploration
 vf_coef: 0.5    # value function
 max_grad_norm: 0.5
 target_kl: null  # set to 0.015 for early stopping based on KL divergence
 
 # Network architecture
-hidden_sizes:
-- 64
-- 64
+# Hidden layer sizes for actor and critic networks (can be different)
+actor_hidden_sizes: [64, 64]   # Actor/policy network hidden layers
+critic_hidden_sizes: [64, 64]  # Critic/value network hidden layers
+# Activation functions (Options: tanh (SB3 default), relu, swish, elu, gelu, leaky_relu)
+actor_activation: "tanh"   # Actor/policy network activation
+critic_activation: "tanh"  # Critic/value network activation
 
 # Normalization
 norm_adv: true  # normalize advantages

@@ -7,9 +7,9 @@ num_envs: 2048  # Large batch size for GPU parallelization
 
 # Training settings
 total_timesteps: 50_000_000  # Total training timesteps
-num_steps: 20  # Rollout length (steps per env before update)
-num_minibatches: 32  # Number of minibatches for PPO update
-update_epochs: 4  # Number of epochs per PPO update
+num_steps: 20  # Rollout length per env (n_steps in SB3, shorter for MJX)
+batch_size: 64  # Minibatch size for training (same as SB3 default)
+update_epochs: 4  # Number of epochs per PPO update (n_epochs in SB3)
 
 # PPO hyperparameters
 learning_rate: 3.0e-4  # Initial learning rate
@@ -20,13 +20,18 @@ gamma: 0.99  # Discount factor
 gae_lambda: 0.95  # GAE lambda parameter
 clip_coef: 0.2  # PPO clipping coefficient
 clip_vloss: true  # Whether to clip value loss
-ent_coef: 0.01  # Entropy coefficient
+ent_coef: 0.0  # SB3 default (use 0.01 for more exploration)
 vf_coef: 0.5  # Value function coefficient
 max_grad_norm: 0.5  # Max gradient norm for clipping
 target_kl: null  # Target KL for early stopping (null = disabled)
 
 # Network architecture
-hidden_sizes: [256, 256]  # Hidden layer sizes
+# Hidden layer sizes for actor and critic networks (can be different)
+actor_hidden_sizes: [256, 256]   # Actor/policy network hidden layers
+critic_hidden_sizes: [256, 256]  # Critic/value network hidden layers
+# Activation functions (Options: tanh (SB3 default), relu, swish, elu, gelu, leaky_relu)
+actor_activation: "tanh"   # Actor/policy network activation
+critic_activation: "tanh"  # Critic/value network activation
 
 # Normalization
 norm_adv: true  # Normalize advantages

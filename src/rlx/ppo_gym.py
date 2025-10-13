@@ -61,9 +61,9 @@ class PPOConfig:
 
     # Training
     total_timesteps: int = 500_000
-    num_steps: int = 128  # rollout length per env
-    num_minibatches: int = 4
-    update_epochs: int = 4
+    num_steps: int = 2048  # rollout length per env
+    batch_size: int = 64  # minibatch size for training
+    update_epochs: int = 10  # n_epochs in SB3
 
     # PPO hyperparameters
     learning_rate: float = 2.5e-4
@@ -74,13 +74,18 @@ class PPOConfig:
     gae_lambda: float = 0.95
     clip_coef: float = 0.2
     clip_vloss: bool = True
-    ent_coef: float = 0.01  # Recommended by Andrychowicz et al. 2021
+    ent_coef: float = 0.01  # 0.01 for more exploration
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
     target_kl: float | None = None
 
     # Network architecture
-    hidden_sizes: list[int] | None = None 
+    actor_hidden_sizes: list[int] | None = None  # Actor/policy network hidden layers
+    critic_hidden_sizes: list[int] | None = None  # Critic/value network hidden layers
+    # Actor/policy network activation: tanh, relu, swish, elu, gelu
+    actor_activation: str = "tanh"
+    # Critic/value network activation: tanh, relu, swish, elu, gelu
+    critic_activation: str = "tanh"
 
     # Normalization
     norm_adv: bool = True
@@ -103,11 +108,24 @@ class PPOConfig:
     resume_from: str | None = None  # Path to checkpoint directory to resume from
 
     def __post_init__(self):
-        if self.hidden_sizes is None:
-            self.hidden_sizes = [64, 64]
-        self.batch_size = self.num_envs * self.num_steps
-        self.minibatch_size = self.batch_size // self.num_minibatches
-        self.num_iterations = self.total_timesteps // self.batch_size
+        # Set default hidden sizes if not provided
+        if self.actor_hidden_sizes is None:
+            self.actor_hidden_sizes = [64, 64]
+        if self.critic_hidden_sizes is None:
+            self.critic_hidden_sizes = [64, 64]
+
+        # Calculate derived values (matching SB3 naming)
+        self.rollout_buffer_size = self.num_envs * self.num_steps
+        self.num_minibatches = self.rollout_buffer_size // self.batch_size
+        self.num_iterations = self.total_timesteps // self.rollout_buffer_size
+
+        # Sanity check (matching SB3)
+        assert self.rollout_buffer_size > 1 or not self.norm_adv, (
+            "`num_envs * num_steps` must be greater than 1 when using advantage normalization"
+        )
+        assert self.batch_size > 1 or not self.norm_adv, (
+            "`batch_size` must be greater than 1 when using advantage normalization"
+        )
 
 
 # ---------------------------
@@ -125,121 +143,180 @@ class RolloutBatch(NamedTuple):
 # ---------------------------
 # Networks
 # ---------------------------
+# Networks
+# ---------------------------
+def _build_mlp(
+    in_features: int,
+    hidden_sizes: list[int],
+    output_size: int,
+    output_scale: float,
+    activation_fn: callable,
+    rngs: nnx.Rngs,
+) -> nnx.Sequential:
+    """Build an MLP with orthogonal initialization (SB3 standard).
+
+    Args:
+        in_features: Input dimension
+        hidden_sizes: List of hidden layer sizes
+        output_size: Output dimension
+        output_scale: Orthogonal initialization scale for output layer (0.01 for policy, 1.0 for value)
+        activation_fn: Activation function (nnx.tanh, nnx.relu, nnx.swish, nnx.elu, etc.)
+        rngs: Random number generators
+
+    Returns:
+        Sequential network
+    """
+    layers = []
+    current_size = in_features
+
+    # Hidden layers with activation
+    for hidden_size in hidden_sizes:
+        layers.append(
+            nnx.Linear(
+                current_size,
+                hidden_size,
+                kernel_init=nnx.initializers.orthogonal(scale=np.sqrt(2)),
+                bias_init=nnx.initializers.constant(0.0),
+                rngs=rngs,
+            )
+        )
+        layers.append(activation_fn)
+        current_size = hidden_size
+
+    # Output layer
+    layers.append(
+        nnx.Linear(
+            current_size,
+            output_size,
+            kernel_init=nnx.initializers.orthogonal(scale=output_scale),
+            bias_init=nnx.initializers.constant(0.0),
+            rngs=rngs,
+        )
+    )
+
+    return nnx.Sequential(*layers)
+
+
+def get_activation_fn(activation: str) -> callable:
+    """Get activation function by name.
+
+    Args:
+        activation: Name of activation function (tanh, relu, swish, elu, etc.)
+
+    Returns:
+        Activation function
+
+    Raises:
+        ValueError: If activation name is not recognized
+    """
+    activations = {
+        "tanh": nnx.tanh,
+        "relu": nnx.relu,
+        "swish": nnx.swish,
+        "elu": nnx.elu,
+        "gelu": nnx.gelu,
+        "leaky_relu": nnx.leaky_relu,
+    }
+
+    activation_lower = activation.lower()
+    if activation_lower not in activations:
+        raise ValueError(
+            f"Unknown activation function: {activation}. "
+            f"Supported: {list(activations.keys())}"
+        )
+
+    return activations[activation_lower]
+
+
 class ActorCritic(nnx.Module):
-    """Separate actor-critic networks for continuous control."""
+    """Actor-critic network with separate policy and value networks.
+
+    Supports both discrete and continuous action spaces, matching SB3 architecture.
+    Allows different architectures (hidden sizes and activations) for actor and critic.
+    """
 
     def __init__(
         self,
         obs_shape: tuple[int, ...],
         action_space: gym.Space,
-        hidden_sizes: list[int],
+        actor_hidden_sizes: list[int],
+        critic_hidden_sizes: list[int],
+        actor_activation_fn: callable,
+        critic_activation_fn: callable,
         rngs: nnx.Rngs,
     ):
         self.is_discrete = isinstance(action_space, gym.spaces.Discrete)
         in_features = int(np.prod(obs_shape))
 
+        # Determine output dimensions
         if self.is_discrete:
-            # Shared network for discrete actions (like original implementation)
-            layers = []
-            for hidden_size in hidden_sizes:
-                layers.append(nnx.Linear(in_features, hidden_size, rngs=rngs))
-                layers.append(nnx.relu)
-                in_features = hidden_size
-            self.features = nnx.Sequential(*layers)
-            self.action_net = nnx.Linear(in_features, action_space.n, rngs=rngs)
-            self.value_net = nnx.Linear(in_features, 1, rngs=rngs)
+            action_dim = action_space.n
         else:
-            # Separate networks for continuous actions (following CleanRL and research)
             action_dim = int(np.prod(action_space.shape))
-
-            # Critic network (value function) with orthogonal init
-            critic_layers = []
-            critic_in = in_features
-            for hidden_size in hidden_sizes:
-                critic_layers.append(
-                    nnx.Linear(
-                        critic_in,
-                        hidden_size,
-                        kernel_init=nnx.initializers.orthogonal(scale=np.sqrt(2)),
-                        bias_init=nnx.initializers.constant(0.0),
-                        rngs=rngs,
-                    )
-                )
-                critic_layers.append(nnx.tanh)  # Tanh activation for continuous control
-                critic_in = hidden_size
-            critic_layers.append(
-                nnx.Linear(
-                    critic_in,
-                    1,
-                    kernel_init=nnx.initializers.orthogonal(scale=1.0),
-                    bias_init=nnx.initializers.constant(0.0),
-                    rngs=rngs,
-                )
-            )
-            self.critic = nnx.Sequential(*critic_layers)
-
-            # Actor network (policy) with orthogonal init
-            actor_layers = []
-            actor_in = in_features
-            for hidden_size in hidden_sizes:
-                actor_layers.append(
-                    nnx.Linear(
-                        actor_in,
-                        hidden_size,
-                        kernel_init=nnx.initializers.orthogonal(scale=np.sqrt(2)),
-                        bias_init=nnx.initializers.constant(0.0),
-                        rngs=rngs,
-                    )
-                )
-                actor_layers.append(nnx.tanh)  # Tanh activation for continuous control
-                actor_in = hidden_size
-            actor_layers.append(
-                nnx.Linear(
-                    actor_in,
-                    action_dim,
-                    kernel_init=nnx.initializers.orthogonal(
-                        scale=0.01
-                    ),  # Small init for policy
-                    bias_init=nnx.initializers.constant(0.0),
-                    rngs=rngs,
-                )
-            )
-            self.actor_mean = nnx.Sequential(*actor_layers)
-
-            # Initialize log_std as parameter
+            # Learnable log standard deviation for continuous actions
             self.action_logstd = nnx.Param(jnp.zeros(action_dim))
 
+        # Build policy network (actor for continuous, policy for discrete)
+        self.policy_net = _build_mlp(
+            in_features,
+            actor_hidden_sizes,
+            action_dim,
+            output_scale=0.01,
+            activation_fn=actor_activation_fn,
+            rngs=rngs,
+        )
+
+        # Build value network (separate from policy, matching SB3)
+        self.value_net = _build_mlp(
+            in_features,
+            critic_hidden_sizes,
+            1,
+            output_scale=1.0,
+            activation_fn=critic_activation_fn,
+            rngs=rngs,
+        )
+
     def __call__(self, x: jax.Array) -> tuple[distrax.Distribution, jax.Array]:
-        """Returns (action_dist, value)."""
+        """Forward pass returning action distribution and value estimate.
+
+        Args:
+            x: Observation tensor [batch, ...]
+
+        Returns:
+            (action_distribution, value_estimate)
+        """
         # Flatten observation if needed
         if x.ndim > 2:
             x = x.reshape(x.shape[0], -1)
 
+        # Get policy output (logits for discrete, mean for continuous)
+        policy_output = self.policy_net(x)
+        value = self.value_net(x).squeeze(-1)
+
         if self.is_discrete:
-            features = self.features(x)
-            value = self.value_net(features).squeeze(-1)
-            logits = self.action_net(features)
-            dist = distrax.Categorical(logits=logits)
-            return dist, value
+            # Discrete: Categorical distribution over logits
+            dist = distrax.Categorical(logits=policy_output)
         else:
-            # Separate forward passes for actor and critic
-            value = self.critic(x).squeeze(-1)
-            mean = self.actor_mean(x)
-            log_std = jnp.broadcast_to(self.action_logstd.value, mean.shape)
+            # Continuous: Diagonal Gaussian with learnable std
+            log_std = jnp.broadcast_to(self.action_logstd.value, policy_output.shape)
             std = jnp.exp(log_std)
-            dist = distrax.MultivariateNormalDiag(loc=mean, scale_diag=std)
-            return dist, value
+            dist = distrax.MultivariateNormalDiag(loc=policy_output, scale_diag=std)
+
+        return dist, value
 
     def get_value(self, x: jax.Array) -> jax.Array:
-        """Get value estimate only."""
+        """Get value estimate only (used for bootstrapping).
+
+        Args:
+            x: Observation tensor [batch, ...]
+
+        Returns:
+            value_estimate: [batch]
+        """
         if x.ndim > 2:
             x = x.reshape(x.shape[0], -1)
 
-        if self.is_discrete:
-            features = self.features(x)
-            return self.value_net(features).squeeze(-1)
-        else:
-            return self.critic(x).squeeze(-1)
+        return self.value_net(x).squeeze(-1)
 
     def get_action_and_value(
         self,
@@ -247,9 +324,18 @@ class ActorCritic(nnx.Module):
         action: jax.Array | None = None,
         key: jax.Array | None = None,
     ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-        """
-        Returns: (action, log_prob, entropy, value)
-        If action is None, samples from policy. Otherwise computes log_prob of given action.
+        """Get action (sampled or provided) with its log probability, entropy, and value.
+
+        Args:
+            x: Observation tensor [batch, ...]
+            action: Optional action to evaluate. If None, samples from policy.
+            key: Random key for sampling (required if action is None)
+
+        Returns:
+            action: Sampled or provided action [batch, ...]
+            log_prob: Log probability of the action [batch]
+            entropy: Entropy of the action distribution [batch]
+            value: Value estimate [batch]
         """
         dist, value = self(x)
 
@@ -270,6 +356,7 @@ def compute_gae(
     values: jax.Array,
     dones: jax.Array,
     next_value: jax.Array,
+    next_done: jax.Array,
     gamma: float,
     gae_lambda: float,
 ) -> tuple[jax.Array, jax.Array]:
@@ -279,8 +366,9 @@ def compute_gae(
     Args:
         rewards: [num_steps, num_envs]
         values: [num_steps, num_envs]
-        dones: [num_steps, num_envs]
-        next_value: [num_envs]
+        dones: [num_steps, num_envs] - terminal state at start of each step
+        next_value: [num_envs] - value estimate for state after last step
+        next_done: [num_envs] - terminal state after last step
         gamma: discount factor
         gae_lambda: GAE lambda
 
@@ -294,8 +382,12 @@ def compute_gae(
 
     # Compute advantages backwards
     for t in reversed(range(num_steps)):
-        nextnonterminal = 1.0 - dones[t]
-        nextvalues = next_value if t == num_steps - 1 else values[t + 1]
+        if t == num_steps - 1:
+            nextnonterminal = 1.0 - next_done
+            nextvalues = next_value
+        else:
+            nextnonterminal = 1.0 - dones[t + 1]
+            nextvalues = values[t + 1]
 
         delta = rewards[t] + gamma * nextvalues * nextnonterminal - values[t]
         lastgaelam = delta + gamma * gae_lambda * nextnonterminal * lastgaelam
@@ -523,6 +615,11 @@ def train(cfg: PPOConfig):
 
     # Apply vectorized normalization wrappers if requested
     envs = gym.wrappers.vector.RecordEpisodeStatistics(envs)
+
+    # For continuous control, clip actions to valid range (critical for MuJoCo, etc.)
+    if isinstance(envs.single_action_space, gym.spaces.Box):
+        envs = gym.wrappers.vector.ClipAction(envs)
+
     if cfg.norm_obs:
         envs = gym.wrappers.vector.NormalizeObservation(envs)
         envs = gym.wrappers.vector.TransformObservation(
@@ -538,11 +635,18 @@ def train(cfg: PPOConfig):
     obs_shape = envs.single_observation_space.shape
     action_space = envs.single_action_space
 
+    # Get activation functions for actor and critic
+    actor_activation_fn = get_activation_fn(cfg.actor_activation)
+    critic_activation_fn = get_activation_fn(cfg.critic_activation)
+
     key, model_key = jax.random.split(key)
     model = ActorCritic(
         obs_shape=obs_shape,
         action_space=action_space,
-        hidden_sizes=cfg.hidden_sizes,
+        actor_hidden_sizes=cfg.actor_hidden_sizes,
+        critic_hidden_sizes=cfg.critic_hidden_sizes,
+        actor_activation_fn=actor_activation_fn,
+        critic_activation_fn=critic_activation_fn,
         rngs=nnx.Rngs(model_key),
     )
 
@@ -612,6 +716,7 @@ def train(cfg: PPOConfig):
 
     # Training loop
     obs, _ = envs.reset(seed=cfg.seed)
+    next_done = np.zeros(cfg.num_envs, dtype=np.float32)  # Track terminal states
     global_step = 0
     num_updates = 0
 
@@ -643,6 +748,7 @@ def train(cfg: PPOConfig):
         for step in range(cfg.num_steps):
             global_step += cfg.num_envs
             rollout_obs[step] = obs
+            rollout_dones[step] = next_done
 
             # Sample action
             key, action_key = jax.random.split(key)
@@ -657,10 +763,9 @@ def train(cfg: PPOConfig):
 
             # Step environment
             obs, reward, terminated, truncated, info = envs.step(np.array(action))
-            done = terminated | truncated
+            next_done = terminated | truncated
 
             rollout_rewards[step] = reward
-            rollout_dones[step] = done
 
             # Log episode stats - gym.make_vec uses "episode" and "_episode" keys
             if "_episode" in info and info["_episode"].any():
@@ -688,6 +793,7 @@ def train(cfg: PPOConfig):
             jnp.array(rollout_values),
             jnp.array(rollout_dones),
             jnp.array(next_value),
+            jnp.array(next_done),
             cfg.gamma,
             cfg.gae_lambda,
         )
@@ -705,10 +811,10 @@ def train(cfg: PPOConfig):
         for epoch in range(cfg.update_epochs):
             # Random permutation for minibatches
             key, perm_key = jax.random.split(key)
-            perm = jax.random.permutation(perm_key, cfg.batch_size)
+            perm = jax.random.permutation(perm_key, cfg.rollout_buffer_size)
 
-            for start in range(0, cfg.batch_size, cfg.minibatch_size):
-                end = start + cfg.minibatch_size
+            for start in range(0, cfg.rollout_buffer_size, cfg.batch_size):
+                end = start + cfg.batch_size
                 mb_inds = perm[start:end]
 
                 # Normalize advantages per minibatch

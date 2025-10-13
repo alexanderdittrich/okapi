@@ -19,6 +19,7 @@ from __future__ import annotations
 
 # Suppress warnings before imports
 import warnings
+
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 warnings.filterwarnings("ignore", message=".*UnsupportedFieldAttributeWarning.*")
 
@@ -64,9 +65,9 @@ class PPOMJXConfig:
 
     # Training
     total_timesteps: int = 50_000_000
-    num_steps: int = 20  # Shorter rollouts for faster iteration
-    num_minibatches: int = 32
-    update_epochs: int = 4
+    num_steps: int = 20  # rollout length per env (shorter for MJX)
+    batch_size: int = 64  # minibatch size for training (same as SB3 default)
+    update_epochs: int = 4  # n_epochs in SB3
 
     # PPO hyperparameters
     learning_rate: float = 3e-4
@@ -77,13 +78,18 @@ class PPOMJXConfig:
     gae_lambda: float = 0.95
     clip_coef: float = 0.2
     clip_vloss: bool = True
-    ent_coef: float = 0.01
+    ent_coef: float = 0.0  # SB3 default (use 0.01 for more exploration)
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
     target_kl: float | None = None
 
     # Network architecture
-    hidden_sizes: list[int] | None = None  # [256, 256] by default for complex tasks
+    actor_hidden_sizes: list[int] | None = None  # Actor/policy network hidden layers
+    critic_hidden_sizes: list[int] | None = None  # Critic/value network hidden layers
+    # Actor/policy network activation: tanh, relu, swish, elu, gelu
+    actor_activation: str = "tanh"
+    # Critic/value network activation: tanh, relu, swish, elu, gelu
+    critic_activation: str = "tanh"
 
     # Normalization
     norm_adv: bool = True
@@ -102,16 +108,110 @@ class PPOMJXConfig:
     resume_from: str | None = None
 
     def __post_init__(self):
-        if self.hidden_sizes is None:
-            self.hidden_sizes = [256, 256]
-        self.batch_size = self.num_envs * self.num_steps
-        self.minibatch_size = self.batch_size // self.num_minibatches
-        self.num_iterations = self.total_timesteps // self.batch_size
+        if self.actor_hidden_sizes is None:
+            self.actor_hidden_sizes = [256, 256]
+        if self.critic_hidden_sizes is None:
+            self.critic_hidden_sizes = [256, 256]
+        
+        # Calculate derived values (matching SB3 naming)
+        self.rollout_buffer_size = self.num_envs * self.num_steps
+        self.num_minibatches = self.rollout_buffer_size // self.batch_size
+        self.num_iterations = self.total_timesteps // self.rollout_buffer_size
+        
+        # Sanity check (matching SB3)
+        assert self.rollout_buffer_size > 1 or not self.norm_adv, (
+            "`num_envs * num_steps` must be greater than 1 when using advantage normalization"
+        )
+        assert self.batch_size > 1 or not self.norm_adv, (
+            "`batch_size` must be greater than 1 when using advantage normalization"
+        )
 
 
 # ---------------------------
 # Networks
 # ---------------------------
+def _build_mlp(
+    in_features: int,
+    hidden_sizes: list[int],
+    output_size: int,
+    output_scale: float,
+    activation_fn: callable,
+    rngs: nnx.Rngs,
+) -> nnx.Sequential:
+    """Build an MLP with orthogonal initialization (SB3 standard).
+
+    Args:
+        in_features: Input dimension
+        hidden_sizes: List of hidden layer sizes
+        output_size: Output dimension
+        output_scale: Orthogonal initialization scale for output layer (0.01 for policy, 1.0 for value)
+        activation_fn: Activation function (nnx.tanh, nnx.relu, nnx.swish, nnx.elu, etc.)
+        rngs: Random number generators
+
+    Returns:
+        Sequential network
+    """
+    layers = []
+    current_size = in_features
+
+    # Hidden layers with activation
+    for hidden_size in hidden_sizes:
+        layers.append(
+            nnx.Linear(
+                current_size,
+                hidden_size,
+                kernel_init=nnx.initializers.orthogonal(scale=np.sqrt(2)),
+                bias_init=nnx.initializers.constant(0.0),
+                rngs=rngs,
+            )
+        )
+        layers.append(activation_fn)
+        current_size = hidden_size
+
+    # Output layer
+    layers.append(
+        nnx.Linear(
+            current_size,
+            output_size,
+            kernel_init=nnx.initializers.orthogonal(scale=output_scale),
+            bias_init=nnx.initializers.constant(0.0),
+            rngs=rngs,
+        )
+    )
+
+    return nnx.Sequential(*layers)
+
+
+def get_activation_fn(activation: str) -> callable:
+    """Get activation function by name.
+
+    Args:
+        activation: Name of activation function (tanh, relu, swish, elu, etc.)
+
+    Returns:
+        Activation function
+
+    Raises:
+        ValueError: If activation name is not recognized
+    """
+    activations = {
+        "tanh": nnx.tanh,
+        "relu": nnx.relu,
+        "swish": nnx.swish,
+        "elu": nnx.elu,
+        "gelu": nnx.gelu,
+        "leaky_relu": nnx.leaky_relu,
+    }
+
+    if activation not in activations:
+        raise ValueError(
+            f"Unknown activation: {activation}. "
+            f"Available: {list(activations.keys())}"
+        )
+
+    return activations[activation]
+
+
 class ActorCritic(nnx.Module):
     """Actor-Critic network for continuous control."""
 
@@ -119,62 +219,37 @@ class ActorCritic(nnx.Module):
         self,
         obs_size: int,
         action_size: int,
-        hidden_sizes: list[int],
-        rngs: nnx.Rngs,
+        actor_hidden_sizes: list[int],
+        critic_hidden_sizes: list[int],
+        actor_activation: str = "tanh",
+        critic_activation: str = "tanh",
+        rngs: nnx.Rngs = None,
     ):
         self.action_size = action_size
 
-        # Critic network (value function)
-        critic_layers = []
-        in_features = obs_size
-        for hidden_size in hidden_sizes:
-            critic_layers.append(
-                nnx.Linear(
-                    in_features,
-                    hidden_size,
-                    kernel_init=nnx.initializers.orthogonal(scale=np.sqrt(2)),
-                    bias_init=nnx.initializers.constant(0.0),
-                    rngs=rngs,
-                )
-            )
-            critic_layers.append(nnx.tanh)
-            in_features = hidden_size
-        critic_layers.append(
-            nnx.Linear(
-                in_features,
-                1,
-                kernel_init=nnx.initializers.orthogonal(scale=1.0),
-                bias_init=nnx.initializers.constant(0.0),
-                rngs=rngs,
-            )
-        )
-        self.critic = nnx.Sequential(*critic_layers)
+        # Get activation functions
+        actor_activation_fn = get_activation_fn(actor_activation)
+        critic_activation_fn = get_activation_fn(critic_activation)
 
-        # Actor network (policy)
-        actor_layers = []
-        in_features = obs_size
-        for hidden_size in hidden_sizes:
-            actor_layers.append(
-                nnx.Linear(
-                    in_features,
-                    hidden_size,
-                    kernel_init=nnx.initializers.orthogonal(scale=np.sqrt(2)),
-                    bias_init=nnx.initializers.constant(0.0),
-                    rngs=rngs,
-                )
-            )
-            actor_layers.append(nnx.tanh)
-            in_features = hidden_size
-        actor_layers.append(
-            nnx.Linear(
-                in_features,
-                action_size,
-                kernel_init=nnx.initializers.orthogonal(scale=0.01),
-                bias_init=nnx.initializers.constant(0.0),
-                rngs=rngs,
-            )
+        # Build critic network (value function)
+        self.critic = _build_mlp(
+            in_features=obs_size,
+            hidden_sizes=critic_hidden_sizes,
+            output_size=1,
+            output_scale=1.0,
+            activation_fn=critic_activation_fn,
+            rngs=rngs,
         )
-        self.actor_mean = nnx.Sequential(*actor_layers)
+
+        # Build actor network (policy mean)
+        self.actor_mean = _build_mlp(
+            in_features=obs_size,
+            hidden_sizes=actor_hidden_sizes,
+            output_size=action_size,
+            output_scale=0.01,
+            activation_fn=actor_activation_fn,
+            rngs=rngs,
+        )
 
         # Initialize log_std as learnable parameter
         self.action_logstd = nnx.Param(jnp.zeros(action_size))
@@ -425,11 +500,11 @@ def train(cfg: PPOMJXConfig):
     # Load MJX environment
     print(f"Loading environment: {cfg.env_name}")
     env = registry.load(cfg.env_name)
-    
+
     # Get observation and action sizes
     obs_size = env.observation_size
     action_size = env.action_size
-    
+
     print(f"Observation size: {obs_size}")
     print(f"Action size: {action_size}")
     print(f"Number of parallel environments: {cfg.num_envs}")
@@ -439,7 +514,10 @@ def train(cfg: PPOMJXConfig):
     model = ActorCritic(
         obs_size=obs_size,
         action_size=action_size,
-        hidden_sizes=cfg.hidden_sizes,
+        actor_hidden_sizes=cfg.actor_hidden_sizes,
+        critic_hidden_sizes=cfg.critic_hidden_sizes,
+        actor_activation=cfg.actor_activation,
+        critic_activation=cfg.critic_activation,
         rngs=nnx.Rngs(model_key),
     )
 
@@ -510,13 +588,13 @@ def train(cfg: PPOMJXConfig):
     print("Initializing environment states...")
     key, reset_key = jax.random.split(key)
     reset_keys = jax.random.split(reset_key, cfg.num_envs)
-    
+
     # JIT compile the reset and step functions
     jit_reset = jax.jit(jax.vmap(env.reset))
     jit_step = jax.jit(jax.vmap(env.step))
-    
+
     env_state = jit_reset(reset_keys)
-    
+
     global_step = 0
     num_updates = 0
 
@@ -547,7 +625,7 @@ def train(cfg: PPOMJXConfig):
             # Sample actions
             key, action_key = jax.random.split(key)
             action_keys = jax.random.split(action_key, cfg.num_envs)
-            
+
             obs = env_state.obs
             action, logprob, _, value = jax.vmap(
                 lambda o, k: model.get_action_and_value(o, key=k)
@@ -570,10 +648,20 @@ def train(cfg: PPOMJXConfig):
                 done_indices = jnp.where(done_mask)[0]
                 for idx in done_indices:
                     # Try to get episode return from metrics
-                    if hasattr(env_state, 'metrics') and 'episode_return' in env_state.metrics:
-                        episode_returns.append(float(env_state.metrics['episode_return'][idx]))
-                    elif hasattr(env_state, 'info') and 'episode_return' in env_state.info:
-                        episode_returns.append(float(env_state.info['episode_return'][idx]))
+                    if (
+                        hasattr(env_state, "metrics")
+                        and "episode_return" in env_state.metrics
+                    ):
+                        episode_returns.append(
+                            float(env_state.metrics["episode_return"][idx])
+                        )
+                    elif (
+                        hasattr(env_state, "info")
+                        and "episode_return" in env_state.info
+                    ):
+                        episode_returns.append(
+                            float(env_state.info["episode_return"][idx])
+                        )
 
         # Stack rollout data
         rollout_obs = jnp.stack(rollout_obs)
@@ -617,13 +705,13 @@ def train(cfg: PPOMJXConfig):
         for epoch in range(cfg.update_epochs):
             # Random permutation for minibatches
             key, perm_key = jax.random.split(key)
-            perm = jax.random.permutation(perm_key, cfg.batch_size)
+            perm = jax.random.permutation(perm_key, cfg.rollout_buffer_size)
 
-            for start in range(0, cfg.batch_size, cfg.minibatch_size):
-                end = start + cfg.minibatch_size
+            for start in range(0, cfg.rollout_buffer_size, cfg.batch_size):
+                end = start + cfg.batch_size
                 mb_inds = perm[start:end]
 
-                # Normalize advantages per minibatch (like CleanRL)
+                # Normalize advantages per minibatch
                 mb_advantages = b_advantages[mb_inds]
                 if cfg.norm_adv:
                     mb_advantages = (mb_advantages - mb_advantages.mean()) / (
@@ -707,7 +795,7 @@ def train(cfg: PPOMJXConfig):
             episode_return_metric = 0.0
             if episode_returns:
                 episode_return_metric = float(np.mean(episode_returns))
-            elif 'last_episode_return' in locals():
+            elif "last_episode_return" in locals():
                 episode_return_metric = float(last_episode_return)
 
             save_checkpoint(
