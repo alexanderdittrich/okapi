@@ -616,7 +616,6 @@ def train(cfg: PPOConfig):
     # Apply vectorized normalization wrappers if requested
     envs = gym.wrappers.vector.RecordEpisodeStatistics(envs)
 
-    # For continuous control, clip actions to valid range (critical for MuJoCo, etc.)
     if isinstance(envs.single_action_space, gym.spaces.Box):
         envs = gym.wrappers.vector.ClipAction(envs)
 
