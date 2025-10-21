@@ -27,9 +27,9 @@
      inkscape:deskcolor="#d1d1d1"
      inkscape:document-units="mm"
      inkscape:zoom="1.4614334"
-     inkscape:cx="298.33724"
+     inkscape:cx="298.67937"
      inkscape:cy="245.99137"
-     inkscape:window-width="2055"
+     inkscape:window-width="1956"
      inkscape:window-height="1190"
      inkscape:window-x="26"
      inkscape:window-y="23"
@@ -62,7 +62,7 @@
          inkscape:connection-start="#path1-3-1"
          inkscape:connection-end="#path1" />
       <path
-         style="fill:none;fill-rule:evenodd;stroke:#111111;stroke-width:4.34471;stroke-linecap:square;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1"
+         style="fill:#999999;fill-rule:evenodd;stroke:#8c8c8c;stroke-width:4.34471;stroke-linecap:square;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1"
          d="M 39.928693,38.963163 30.9958,34.926138"
          id="path7"
          inkscape:connector-type="polyline"
