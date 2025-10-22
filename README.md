@@ -28,11 +28,15 @@ uv run src/rlx/ppo.py env_id=CartPole-v1 num_train_steps=500000
 ```
 
 ## Benchmarks
-- [ ] Discrete environments: `Acrobot-v1`, `CartPole-v1`, `MountainCar-v0`, `LunarLander-v3`
-- [ ] Continuous environments: `Pendulum-v1`,`BipedalWalker-v3`,`HalfCheetah-v5`, `Hopper-v5`, `Walker2d-v5`, `Ant-v5`
-- [ ] Vision: `CarRacing-v3`, `ALE/SpaceInvaders-v5`, `ALE/Breakout-v5`
 
-- [ ] Playground: `CheetahRun`, `HopperHop`, `HumanoidWalk`, `FishSwim`, `Unitree Go1 Joystick`, `G1 Joystick`, `Leap Reorient`, `Panda Pick`
+### Gymnasium
+- [ ] Gymnasium - Discrete environments: `Acrobot-v1`, `CartPole-v1`, `MountainCar-v0`, `LunarLander-v3`
+- [ ] Gymnasium - Continuous environments: `Pendulum-v1`,`BipedalWalker-v3`,`HalfCheetah-v5`, `Hopper-v5`, `Walker2d-v5`, `Ant-v5`
+- [ ] Gymnasium - Vision environments: `CarRacing-v3`, `ALE/SpaceInvaders-v5`, `ALE/Breakout-v5`
+
+### Playground
+- [ ] Playground - Continuous environments: `CheetahRun`, `HopperHop`, `HumanoidWalk`, `FishSwim`, `Unitree Go1 Joystick`, `G1 Joystick`, `Leap Reorient`, `Panda Pick`
+- [ ] Playground - Vision environments: `CheetahRun`, `HopperHop`, `HumanoidWalk`
 
 ## Roadmap:
 - [ ] Playground MJX API. 
