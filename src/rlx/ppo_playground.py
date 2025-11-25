@@ -46,7 +46,7 @@ from flax import nnx
 from mujoco_playground import locomotion, dm_control_suite, wrapper
 from omegaconf import DictConfig, OmegaConf
 
-from rlx import running_statistics
+from rlx.common import running_statistics
 
 # Set GPU parameters
 xla_flags = os.environ.get("XLA_FLAGS", "")
@@ -70,18 +70,18 @@ class PPOConfig:
 
     # Training
     total_timesteps: int = 10_000_000
-    num_steps: int = 20  # Unroll length (shorter for MJX)
-    batch_size: int = 512  # Minibatch size
+    num_steps: int = 20  # Unroll length - Brax uses 10-20 for locomotion
+    batch_size: int = 1024  # Minibatch size
     update_epochs: int = 4  # Epochs per update
 
     # PPO hyperparameters
     learning_rate: float = 3e-4
     anneal_lr: bool = False
-    gamma: float = 0.97
+    gamma: float = 0.99  # Brax default
     gae_lambda: float = 0.95
-    clip_coef: float = 0.2
+    clip_coef: float = 0.3  # Brax default
     clip_vloss: bool = True
-    ent_coef: float = 1e-2
+    ent_coef: float = 1e-2  # Brax default
     vf_coef: float = 0.5
     max_grad_norm: float = 1.0
     target_kl: float | None = None
@@ -92,9 +92,10 @@ class PPOConfig:
     actor_activation: str = "swish"
     critic_activation: str = "swish"
 
-    # Normalization
+    # Normalization & Scaling
     norm_adv: bool = True
-    norm_obs: bool = True  # Normalize observations (critical for continuous control)
+    norm_obs: bool = False  # Disabled for now - adds compilation overhead
+    reward_scaling: float = 1.0  # No scaling - use raw rewards
 
     # Logging
     log_frequency: int = 10
@@ -110,9 +111,9 @@ class PPOConfig:
 
     def __post_init__(self):
         if self.actor_hidden_sizes is None:
-            self.actor_hidden_sizes = [128, 128, 128, 128]
+            self.actor_hidden_sizes = [256, 256]  # Brax default
         if self.critic_hidden_sizes is None:
-            self.critic_hidden_sizes = [256, 256, 256, 256]
+            self.critic_hidden_sizes = [256, 256]  # Brax default
 
         # Calculate derived values
         self.rollout_buffer_size = self.num_envs * self.num_steps
@@ -283,7 +284,7 @@ def sample_action(
     dist, value = model(obs)
     action = dist.sample(seed=key)
     logprob = dist.log_prob(action)
-    return action, logprob, value.squeeze(-1)
+    return action, logprob, value  # value is already squeezed in model.__call__
 
 
 def get_value(
@@ -351,10 +352,35 @@ def compute_gae(
     return advantages, returns
 
 
+# Running normalization update function 
+def update_normalization(mean, var, count, batch_obs):
+    """Update running mean and variance with new batch of observations. 
+    (Welford's online algorithm)"""
+    batch_mean = batch_obs.mean(axis=0)
+    batch_var = batch_obs.var(axis=0)
+    batch_count = jnp.array(batch_obs.shape[0], dtype=jnp.float32)
+    
+    delta = batch_mean - mean
+    total_count = count + batch_count
+    
+    new_mean = mean + delta * batch_count / total_count
+    m_a = var * count
+    m_b = batch_var * batch_count
+    M2 = m_a + m_b + delta**2 * count * batch_count / total_count
+    new_var = M2 / total_count
+    
+    return new_mean, new_var, total_count
+
+# Simple normalize function
+def normalize_obs(obs, mean, var):
+    return (obs - mean) / jnp.sqrt(var + 1e-8)
+
+
+@nnx.jit
 def train_step(
     model: ActorCritic,
     optimizer: nnx.Optimizer,
-    obs: jax.Array,  # Normalized observations
+    obs: jax.Array,  # Pre-normalized observations
     actions: jax.Array,
     old_logprobs: jax.Array,
     advantages: jax.Array,
@@ -365,10 +391,10 @@ def train_step(
     ent_coef: float,
     clip_vloss: bool,
 ) -> dict[str, jax.Array]:
-    """Single training step (one minibatch, observations should already be normalized)."""
+    """Single training step (one minibatch, observations pre-normalized)."""
 
     def loss_fn(model: ActorCritic):
-        # Get current distribution and value (obs already normalized)
+        # Get current distribution and value (obs pre-normalized)
         dist, value = model(obs)
         logprob = dist.log_prob(actions)
         entropy = dist.entropy().mean()
@@ -382,17 +408,20 @@ def train_step(
         ).mean()
 
         # Value loss
-        if clip_vloss:
+        def compute_clipped_v_loss():
             value_clipped = old_values + jnp.clip(
                 value - old_values, -clip_coef, clip_coef
             )
             value_loss_unclipped = (value - returns) ** 2
             value_loss_clipped = (value_clipped - returns) ** 2
-            value_loss = (
-                0.5 * jnp.maximum(value_loss_unclipped, value_loss_clipped).mean()
-            )
-        else:
-            value_loss = 0.5 * ((value - returns) ** 2).mean()
+            return 0.5 * jnp.maximum(value_loss_unclipped, value_loss_clipped).mean()
+
+        def compute_unclipped_v_loss():
+            return 0.5 * ((value - returns) ** 2).mean()
+
+        value_loss = jax.lax.cond(
+            clip_vloss, compute_clipped_v_loss, compute_unclipped_v_loss
+        )
 
         # Total loss
         loss = policy_loss + vf_coef * value_loss - ent_coef * entropy
@@ -409,10 +438,11 @@ def train_step(
         }
 
     # Compute gradients
-    (loss, info), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model)
+    grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
+    (loss, info), grads = grad_fn(model)
 
-    # Update parameters (Flax 0.11.0+ requires model and grads)
-    optimizer.update(model, grads)
+    # Update parameters (modifies model in-place)
+    optimizer.update(model=model, grads=grads)
 
     return info
 
@@ -501,72 +531,67 @@ def train(cfg: PPOConfig):
         )
 
     # Training loop
-    print("\nStarting training...")
     start_time = time.time()
 
     # Initialize environment state
-    # The wrapped environment expects a batch of keys [num_envs]
     key, reset_key = jax.random.split(key)
     reset_keys = jax.random.split(reset_key, cfg.num_envs)
     env_state = jax.jit(env.reset)(reset_keys)
 
+    # Initialize observation normalization with running statistics
+    initial_obs = env_state.obs  # shape: (num_envs, obs_size)
+    obs_count = jnp.array(cfg.num_envs, dtype=jnp.float32)
+    obs_mean = initial_obs.mean(axis=0)
+    obs_var = initial_obs.var(axis=0) + 1e-8
+
     global_step = 0
 
     # Define rollout collection function
-    def collect_rollout(model_state, env_state, key):
+    # Do NOT JIT - env.step is already JIT-compiled internally, and adding another
+    # layer of JIT causes extremely long compilation times
+    def collect_rollout(model, env_state, mean, var, key):
         """Collect a rollout using lax.scan."""
-        # Split model into graphdef and state for functional programming
-        graphdef, model_params = nnx.split(model)
 
         def step_fn(carry, _):
-            model_params, env_state, key = carry
+            env_state, key = carry
             key, action_key = jax.random.split(key)
 
-            # Reconstruct model from graphdef and params
-            model_local = nnx.merge(graphdef, model_params)
-
-            # Sample action
+            # Normalize observations and sample action
+            obs_norm = normalize_obs(env_state.obs, mean, var)
             action, logprob, value = sample_action(
-                model_local, env_state.obs, action_key
+                model, obs_norm, None, action_key
             )
 
             # Step environment (wrapper already handles vectorization)
             next_env_state = env.step(env_state, action)
 
-            # Create transition
+            # Create transition (apply reward scaling)
             transition = Transition(
                 obs=env_state.obs,
                 action=action,
                 logprob=logprob,
                 value=value,
-                reward=next_env_state.reward,
+                reward=next_env_state.reward * cfg.reward_scaling,
                 done=next_env_state.done,
             )
 
-            return (model_params, next_env_state, key), transition
+            return (next_env_state, key), transition
 
         # Scan over num_steps
-        (model_params, final_env_state, _), transitions = jax.lax.scan(
+        (final_env_state, _), transitions = jax.lax.scan(
             step_fn,
-            (model_params, env_state, key),
+            (env_state, key),
             None,
             length=cfg.num_steps,
         )
 
         return final_env_state, transitions
 
-    # JIT compile rollout collection
-    collect_rollout_jit = jax.jit(collect_rollout)
-
     # Define update function
     def update_epoch(
-        model_params, optimizer_state, transitions, next_value, update_key
+        model, optimizer, transitions, next_value, mean, var, update_key
     ):
         """Run PPO update for one epoch."""
-        # Split optimizer for functional programming
-        graphdef_model, _ = nnx.split(model)
-        graphdef_opt, _ = nnx.split(optimizer)
-
         # Flatten batch dimension: [num_steps, num_envs, ...] -> [batch_size, ...]
         flatten = lambda x: x.reshape(cfg.rollout_buffer_size, *x.shape[2:])
 
@@ -574,8 +599,9 @@ def train(cfg: PPOConfig):
         actions = flatten(transitions.action)
         logprobs = flatten(transitions.logprob)
         values = flatten(transitions.value)
-        rewards = flatten(transitions.reward)
-        dones = flatten(transitions.done)
+
+        # Normalize observations with current statistics
+        obs_normalized = normalize_obs(obs, mean, var)
 
         # Compute advantages and returns
         advantages, returns = compute_gae(
@@ -591,11 +617,17 @@ def train(cfg: PPOConfig):
         advantages = flatten(advantages)
         returns = flatten(returns)
 
-        # Normalize advantages (per minibatch during training)
-        def minibatch_step(carry, indices):
-            model_params, optimizer_state = carry
+        # Shuffle indices
+        perm = jax.random.permutation(update_key, cfg.rollout_buffer_size)
 
-            mb_obs = obs[indices]
+        # Process each minibatch
+        all_metrics = []
+        for i in range(cfg.num_minibatches):
+            start_idx = i * cfg.batch_size
+            end_idx = start_idx + cfg.batch_size
+            indices = perm[start_idx:end_idx]
+
+            mb_obs = obs_normalized[indices]
             mb_actions = actions[indices]
             mb_logprobs = logprobs[indices]
             mb_returns = returns[indices]
@@ -608,14 +640,10 @@ def train(cfg: PPOConfig):
                     mb_advantages.std() + 1e-8
                 )
 
-            # Reconstruct model and optimizer
-            model_local = nnx.merge(graphdef_model, model_params)
-            optimizer_local = nnx.merge(graphdef_opt, optimizer_state)
-
-            # Training step
+            # Training step (updates model in-place)
             info = train_step(
-                model_local,
-                optimizer_local,
+                model,
+                optimizer,
                 mb_obs,
                 mb_actions,
                 mb_logprobs,
@@ -627,53 +655,47 @@ def train(cfg: PPOConfig):
                 cfg.ent_coef,
                 cfg.clip_vloss,
             )
+            
+            all_metrics.append(info)
 
-            # Split back to get updated params
-            _, new_model_params = nnx.split(model_local)
-            _, new_optimizer_state = nnx.split(optimizer_local)
+        # Average metrics across minibatches
+        avg_metrics = {}
+        for key in all_metrics[0].keys():
+            avg_metrics[key] = jnp.mean(jnp.array([m[key] for m in all_metrics]))
 
-            return (new_model_params, new_optimizer_state), info
+        return avg_metrics
 
-        # Shuffle indices
-        perm = jax.random.permutation(update_key, cfg.rollout_buffer_size)
-
-        # Reshape into minibatches
-        minibatch_indices = perm.reshape(cfg.num_minibatches, cfg.batch_size)
-
-        # Scan over minibatches
-        (final_model_params, final_optimizer_state), metrics = jax.lax.scan(
-            minibatch_step, (model_params, optimizer_state), minibatch_indices
-        )
-
-        return final_model_params, final_optimizer_state, metrics
-
-    # JIT compile update function
-    update_epoch_jit = jax.jit(update_epoch)
-
-    # Split model and optimizer for functional programming
-    graphdef_model, model_params = nnx.split(model)
-    graphdef_opt, optimizer_state = nnx.split(optimizer)
+    # Do NOT JIT compile update_epoch - it contains Python for-loop and calls already-jitted train_step
+    # The train_step calls are already @nnx.jit decorated, so we get full performance
+    # JIT-ing this would break the in-place model updates
 
     # Main training loop
     for iteration in range(cfg.num_iterations):
         iter_start_time = time.time()
 
-        # Collect rollout
+        # Collect rollout with current normalization statistics
         key, rollout_key = jax.random.split(key)
-        env_state, transitions = collect_rollout_jit(
-            model_params, env_state, rollout_key
+        env_state, transitions = collect_rollout(
+            model, env_state, obs_mean, obs_var, rollout_key
         )
 
-        # Get bootstrap value
-        model_temp = nnx.merge(graphdef_model, model_params)
-        next_value = get_value(model_temp, env_state.obs)
+        # Update observation normalization statistics with new data
+        # Flatten transitions to update statistics
+        flat_obs = transitions.obs.reshape(-1, obs_size)
+        obs_mean, obs_var, obs_count = update_normalization(
+            obs_mean, obs_var, obs_count, flat_obs
+        )
+
+        # Get bootstrap value (normalize observations)
+        obs_norm = normalize_obs(env_state.obs, obs_mean, obs_var)
+        next_value = get_value(model, obs_norm, None)
 
         # Run multiple update epochs
         update_metrics = {}
         for epoch in range(cfg.update_epochs):
             key, epoch_key = jax.random.split(key)
-            model_params, optimizer_state, metrics = update_epoch_jit(
-                model_params, optimizer_state, transitions, next_value, epoch_key
+            metrics = update_epoch(
+                model, optimizer, transitions, next_value, obs_mean, obs_var, epoch_key
             )
 
             # Accumulate metrics (keep as JAX arrays)
@@ -685,23 +707,19 @@ def train(cfg: PPOConfig):
 
             # Early stopping based on KL divergence
             if cfg.target_kl is not None:
-                avg_kl = float(update_metrics["loss/approx_kl"].mean()) / (epoch + 1)
+                avg_kl = float(update_metrics["loss/approx_kl"]) / (epoch + 1)
                 if avg_kl > cfg.target_kl:
                     print(
                         f"Early stopping at epoch {epoch} due to KL divergence: {avg_kl:.4f}"
                     )
                     break
 
-        # Update actual model and optimizer with new params
-        model = nnx.merge(graphdef_model, model_params)
-        optimizer = nnx.merge(graphdef_opt, optimizer_state)
-
         # Average metrics over epochs
         num_epochs_completed = (
             epoch + 1 if cfg.target_kl is not None else cfg.update_epochs
         )
         for k in update_metrics:
-            update_metrics[k] = float(update_metrics[k].mean() / num_epochs_completed)
+            update_metrics[k] = float(update_metrics[k] / num_epochs_completed)
 
         # Update global step
         global_step += cfg.rollout_buffer_size
@@ -713,6 +731,10 @@ def train(cfg: PPOConfig):
         # Calculate episode metrics from transitions
         # Mean reward per step across all environments
         mean_reward = float(transitions.reward.mean())
+        max_reward = float(transitions.reward.max())
+        min_reward = float(transitions.reward.min())
+        std_reward = float(transitions.reward.std())
+        
         # Estimate episode return (mean reward * typical episode length)
         episode_return_estimate = (
             mean_reward * 1000
@@ -725,13 +747,18 @@ def train(cfg: PPOConfig):
             print(f"  Global step: {global_step}/{cfg.total_timesteps}")
             print(f"  SPS: {sps:.0f}")
             print(f"  Elapsed: {elapsed_time:.1f}s")
-            print(f"  Mean reward/step: {mean_reward:.4f}")
+            print(f"  Rewards - mean: {mean_reward:.6f}, std: {std_reward:.6f}, min: {min_reward:.6f}, max: {max_reward:.6f}")
             print(f"  Est. episode return: {episode_return_estimate:.1f}")
             print(f"  Policy loss: {update_metrics['loss/policy']:.4f}")
             print(f"  Value loss: {update_metrics['loss/value']:.4f}")
             print(f"  Entropy: {update_metrics['loss/entropy']:.4f}")
             print(f"  Approx KL: {update_metrics['loss/approx_kl']:.4f}")
             print(f"  Clip frac: {update_metrics['loss/clipfrac']:.4f}")
+            
+            # Also print diagnostic info about observations and actions
+            print(f"  Obs - mean: {transitions.obs.mean():.4f}, std: {transitions.obs.std():.4f}")
+            print(f"  Actions - mean: {transitions.action.mean():.4f}, std: {transitions.action.std():.4f}")
+            print(f"  Values - mean: {transitions.value.mean():.4f}, std: {transitions.value.std():.4f}")
 
             if cfg.use_wandb:
                 wandb.log(
