@@ -45,8 +45,8 @@ class VariBADConfig:
     """All hyperparameters matching original VariBAD.
     
     Supported environments:
-    - HalfCheetahDir-v0: 17D obs, 6D action
-    - AntDir-v0: 105D obs, 8D action
+    - HalfCheetahDir-v0:    17D obs, 6D action
+    - AntDir-v0:            27D obs, 8D action
     """
     # Env
     env_name: str = "HalfCheetahDir-v0"
@@ -54,7 +54,7 @@ class VariBADConfig:
     max_rollouts_per_task: int = 2
     
     # Training
-    num_frames: int = int(2e7)
+    num_frames: int = 1000000
     policy_num_steps: int = 200
     
     # VAE architecture
@@ -111,6 +111,82 @@ class VariBADConfig:
     wandb_entity: Optional[str] = None
     wandb_run_name: Optional[str] = None
     verbose: bool = True
+
+
+class RolloutStoragePPO:
+    """Stores rollouts for PPO training."""
+    def __init__(self, num_steps, num_envs, obs_dim, action_dim, latent_dim):
+        self.num_steps = num_steps
+        self.num_envs = num_envs
+        
+        # Trajectory data
+        self.obs = np.zeros((num_steps, num_envs, obs_dim))
+        self.latents = np.zeros((num_steps, num_envs, latent_dim))
+        self.actions = np.zeros((num_steps, num_envs, action_dim))
+        self.rewards = np.zeros((num_steps, num_envs))
+        self.values = np.zeros((num_steps, num_envs))
+        self.log_probs = np.zeros((num_steps, num_envs))
+        self.dones = np.zeros((num_steps, num_envs))
+        
+        # Computed during after_update
+        self.returns = np.zeros((num_steps, num_envs))
+        self.advantages = np.zeros((num_steps, num_envs))
+        
+        self.step = 0
+    
+    def insert(self, obs, latent, action, reward, value, log_prob, done):
+        self.obs[self.step] = obs
+        self.latents[self.step] = latent
+        self.actions[self.step] = action
+        self.rewards[self.step] = reward
+        self.values[self.step] = value
+        self.log_probs[self.step] = log_prob
+        self.dones[self.step] = done
+        self.step = (self.step + 1) % self.num_steps
+    
+    def compute_returns_and_advantages(self, next_value, gamma, tau):
+        """Compute returns and advantages using GAE."""
+        self.returns[-1] = next_value
+        gae = 0
+        
+        for step in reversed(range(self.num_steps)):
+            if step == self.num_steps - 1:
+                next_value_step = next_value
+                next_non_terminal = 1.0 - self.dones[step]
+            else:
+                next_value_step = self.values[step + 1]
+                next_non_terminal = 1.0 - self.dones[step]
+            
+            delta = self.rewards[step] + gamma * next_value_step * next_non_terminal - self.values[step]
+            gae = delta + gamma * tau * next_non_terminal * gae
+            self.advantages[step] = gae
+            self.returns[step] = gae + self.values[step]
+    
+    def get_batch(self, batch_size):
+        """Get random minibatch for PPO update."""
+        total_size = self.num_steps * self.num_envs
+        indices = np.random.choice(total_size, batch_size, replace=False)
+        
+        # Flatten arrays
+        obs_flat = self.obs.reshape(-1, self.obs.shape[-1])
+        latents_flat = self.latents.reshape(-1, self.latents.shape[-1])
+        actions_flat = self.actions.reshape(-1, self.actions.shape[-1])
+        returns_flat = self.returns.reshape(-1)
+        advantages_flat = self.advantages.reshape(-1)
+        log_probs_flat = self.log_probs.reshape(-1)
+        
+        return (
+            jnp.array(obs_flat[indices]),
+            jnp.array(latents_flat[indices]),
+            jnp.array(actions_flat[indices]),
+            jnp.array(returns_flat[indices]),
+            jnp.array(advantages_flat[indices]),
+            jnp.array(log_probs_flat[indices])
+        )
+    
+    def after_update(self):
+        """Reset storage after update."""
+        self.step = 0
 
 
 class RolloutStorageVAE:
@@ -218,11 +294,12 @@ class RewardDecoder(nnx.Module):
         self.action_enc = nnx.Linear(action_dim, action_embed_dim, rngs=rngs)
         
         input_dim = latent_dim + 2 * state_embed_dim + action_embed_dim
-        self.layers = []
+        layer_list = []
         curr = input_dim
         for h in layers:
-            self.layers.append(nnx.Linear(curr, h, rngs=rngs))
+            layer_list.append(nnx.Linear(curr, h, rngs=rngs))
             curr = h
+        self.layers = nnx.List(layer_list)
         self.fc_out = nnx.Linear(curr, 1, rngs=rngs)
     
     def __call__(self, latent, next_state, prev_state, action):
@@ -242,18 +319,20 @@ class Policy(nnx.Module):
         input_dim = obs_dim + (args.latent_dim if args.pass_latent_to_policy else 0)
         
         # Actor
-        self.actor_layers = []
+        actor_layer_list = []
         curr = input_dim
         for h in args.policy_layers:
-            self.actor_layers.append(nnx.Linear(curr, h, rngs=rngs))
+            actor_layer_list.append(nnx.Linear(curr, h, rngs=rngs))
             curr = h
+        self.actor_layers = nnx.List(actor_layer_list)
         
         # Critic
-        self.critic_layers = []
+        critic_layer_list = []
         curr = input_dim
         for h in args.policy_layers:
-            self.critic_layers.append(nnx.Linear(curr, h, rngs=rngs))
+            critic_layer_list.append(nnx.Linear(curr, h, rngs=rngs))
             curr = h
+        self.critic_layers = nnx.List(critic_layer_list)
         self.critic_out = nnx.Linear(args.policy_layers[-1], 1, rngs=rngs)
         
         self.is_discrete = isinstance(action_space, gym.spaces.Discrete)
@@ -288,10 +367,19 @@ class Policy(nnx.Module):
         
         return dist, value
     
-    def act(self, state, latent):
+    def act(self, state, latent, key):
+        """Sample action and return action, log_prob, value."""
         dist, value = self(state, latent)
-        action = dist.sample(seed=jax.random.PRNGKey(0))
-        return action, value
+        action = dist.sample(seed=key)
+        log_prob = dist.log_prob(action)
+        return action, log_prob, value
+    
+    def evaluate_actions(self, state, latent, action):
+        """Evaluate actions for PPO update."""
+        dist, value = self(state, latent)
+        log_prob = dist.log_prob(action)
+        entropy = dist.entropy()
+        return log_prob, value, entropy
 
 
 class VariBADVAE:
@@ -300,7 +388,7 @@ class VariBADVAE:
         self.args = args
         self.encoder = encoder
         self.reward_decoder = reward_decoder
-        self.optimizer = nnx.Optimizer(encoder, optax.adam(args.lr_vae))
+        self.optimizer = nnx.Optimizer(encoder, optax.adam(args.lr_vae), wrt=nnx.Param)
     
     def compute_loss(self, mu, logvar, prev_obs, next_obs, actions, rewards):
         # Sample latent
@@ -357,8 +445,18 @@ class MetaLearner:
         # VAE
         self.vae = VariBADVAE(args, self.encoder, self.reward_decoder)
         
+        # Policy optimizer
+        self.policy_optimizer = nnx.Optimizer(self.policy, optax.adam(args.lr_policy), wrt=nnx.Param)
+        
         # Storage
         self.vae_storage = RolloutStorageVAE(args.size_vae_buffer, self.state_dim, self.action_dim)
+        self.ppo_storage = RolloutStoragePPO(
+            args.policy_num_steps, args.num_envs,
+            self.state_dim, self.action_dim, args.latent_dim
+        )
+        
+        # RNG key for sampling
+        self.rng_key = key
         
         self.frames = 0
         
@@ -379,6 +477,76 @@ class MetaLearner:
             )
             print(f"✓ Wandb initialized: {wandb.run.name}")
     
+    def update_ppo(self, next_obs, next_latent):
+        """Update policy using PPO."""
+        # Get next value for GAE
+        _, next_value = self.policy(jnp.array(next_obs), jnp.array(next_latent))
+        next_value = np.array(next_value)
+        
+        # Compute returns and advantages
+        self.ppo_storage.compute_returns_and_advantages(
+            next_value, self.args.policy_gamma, self.args.policy_tau
+        )
+        
+        # Normalize advantages
+        advantages = self.ppo_storage.advantages.reshape(-1)
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        self.ppo_storage.advantages = advantages.reshape(self.ppo_storage.advantages.shape)
+        
+        # PPO epochs
+        policy_loss_total = 0
+        value_loss_total = 0
+        entropy_total = 0
+        
+        batch_size = (self.args.policy_num_steps * self.args.num_envs) // self.args.policy_num_minibatch
+        
+        for epoch in range(self.args.policy_num_epochs):
+            for _ in range(self.args.policy_num_minibatch):
+                obs_batch, latent_batch, action_batch, return_batch, adv_batch, old_log_prob_batch = \
+                    self.ppo_storage.get_batch(batch_size)
+                
+                def loss_fn(policy):
+                    log_prob, value, entropy = policy.evaluate_actions(obs_batch, latent_batch, action_batch)
+                    
+                    # PPO clipped loss
+                    ratio = jnp.exp(log_prob - old_log_prob_batch)
+                    surr1 = ratio * adv_batch
+                    surr2 = jnp.clip(ratio, 1.0 - self.args.policy_clip_param, 1.0 + self.args.policy_clip_param) * adv_batch
+                    policy_loss = -jnp.minimum(surr1, surr2).mean()
+                    
+                    # Value loss
+                    value_loss = ((value - return_batch) ** 2).mean()
+                    
+                    # Entropy bonus
+                    entropy_loss = -entropy.mean()
+                    
+                    total_loss = (policy_loss + 
+                                  self.args.policy_value_loss_coef * value_loss + 
+                                  self.args.policy_entropy_coef * entropy_loss)
+                    
+                    return total_loss, (policy_loss, value_loss, entropy_loss)
+                
+                grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
+                (total_loss, (policy_loss, value_loss, entropy_loss)), grads = grad_fn(self.policy)
+                
+                # Gradient clipping
+                if self.args.policy_max_grad_norm > 0:
+                    grads = jax.tree.map(
+                        lambda g: jnp.clip(g, -self.args.policy_max_grad_norm, self.args.policy_max_grad_norm),
+                        grads
+                    )
+                
+                self.policy_optimizer.update(self.policy, grads)
+                
+                policy_loss_total += float(policy_loss)
+                value_loss_total += float(value_loss)
+                entropy_total += float(entropy_loss)
+        
+        num_updates = self.args.policy_num_epochs * self.args.policy_num_minibatch
+        return (policy_loss_total / num_updates, 
+                value_loss_total / num_updates, 
+                -entropy_total / num_updates)  # Return positive entropy
+    
     def train(self):
         if self.args.verbose:
             print("\n" + "="*60)
@@ -392,28 +560,83 @@ class MetaLearner:
         episode_rewards_buffer = np.zeros(self.args.num_envs)
         episode_lengths_buffer = np.zeros(self.args.num_envs, dtype=int)
         
-        # Collect trajectories
-        for iteration in range(100):  # Simplified
-            # Collect episode
-            trajectory_obs = []
-            trajectory_actions = []
-            trajectory_rewards = []
-            trajectory_next_obs = []
-            
-            iter_rewards = []
+        # Context tracking for belief updates
+        context_obs = [[] for _ in range(self.args.num_envs)]
+        context_actions = [[] for _ in range(self.args.num_envs)]
+        context_rewards = [[] for _ in range(self.args.num_envs)]
+        max_context_len = 50  # Limit context length for efficiency
+        
+        iteration = 0
+        while self.frames < self.args.num_frames:
+            # Collect rollout
+            trajectory_obs_all = []
+            trajectory_actions_all = []
+            trajectory_rewards_all = []
+            trajectory_next_obs_all = []
             
             for step in range(self.args.policy_num_steps):
-                # Get latent (prior for now)
-                mu, logvar = self.encoder.prior(self.args.num_envs)
-                z = mu  # Use mean
+                # Update belief z from accumulated context - batch process
+                latents = []
+                for env_idx in range(self.args.num_envs):
+                    if len(context_rewards[env_idx]) > 0:
+                        # Limit context length
+                        ctx_len = min(len(context_obs[env_idx]), max_context_len)
+                        ctx_o = jnp.array(context_obs[env_idx][-ctx_len:])
+                        ctx_a = jnp.array(context_actions[env_idx][-ctx_len:])
+                        ctx_r = jnp.array(context_rewards[env_idx][-ctx_len:])
+                        
+                        # Reshape for encoder: [seq_len, 1, dim]
+                        ctx_o = ctx_o[:, None, :]
+                        ctx_a = ctx_a[:, None, :]
+                        ctx_r = ctx_r[:, None]
+                        
+                        mu, logvar = self.encoder(ctx_o, ctx_a, ctx_r)
+                        z = mu[0]  # Take first (only) batch element
+                    else:
+                        # Use prior
+                        mu, _ = self.encoder.prior(1)
+                        z = mu[0]
+                    latents.append(z)
                 
-                # Act
-                action, value = self.policy.act(jnp.array(obs), z)
+                latents = jnp.stack(latents)
                 
-                next_obs, reward, term, trunc, info = self.envs.step(np.array(action))
+                # Sample action
+                self.rng_key, action_key = jax.random.split(self.rng_key)
+                action, log_prob, value = self.policy.act(jnp.array(obs), latents, action_key)
+                action_np = np.array(action)
+                
+                # Step environment
+                next_obs, reward, term, trunc, info = self.envs.step(action_np)
                 done = term | trunc
                 
-                # Track episodes
+                # Store in PPO rollout buffer
+                self.ppo_storage.insert(
+                    obs, np.array(latents), action_np, reward, 
+                    np.array(value), np.array(log_prob), done
+                )
+                
+                # Update context
+                for env_idx in range(self.args.num_envs):
+                    context_obs[env_idx].append(obs[env_idx])
+                    context_actions[env_idx].append(action_np[env_idx])
+                    context_rewards[env_idx].append(reward[env_idx])
+                    
+                    # Reset context on episode boundary
+                    if done[env_idx]:
+                        # Store complete episode for VAE
+                        if len(context_obs[env_idx]) > 1:
+                            self.vae_storage.insert_trajectory(
+                                np.array(context_obs[env_idx][:-1]),
+                                np.array(context_actions[env_idx][:-1]),
+                                np.array(context_obs[env_idx][1:]),
+                                np.array(context_rewards[env_idx][:-1])
+                            )
+                        
+                        context_obs[env_idx] = []
+                        context_actions[env_idx] = []
+                        context_rewards[env_idx] = []
+                
+                # Track episode stats
                 episode_rewards_buffer += reward
                 episode_lengths_buffer += 1
                 
@@ -425,23 +648,33 @@ class MetaLearner:
                         episode_rewards_buffer[i] = 0
                         episode_lengths_buffer[i] = 0
                 
-                trajectory_obs.append(obs)
-                trajectory_actions.append(np.array(action))
-                trajectory_rewards.append(reward)
-                trajectory_next_obs.append(next_obs)
-                iter_rewards.append(reward)
+                # Save for VAE training (full trajectories)
+                trajectory_obs_all.append(obs)
+                trajectory_actions_all.append(action_np)
+                trajectory_rewards_all.append(reward)
+                trajectory_next_obs_all.append(next_obs)
                 
                 obs = next_obs
                 self.frames += self.args.num_envs
             
-            # Store trajectory
-            if len(trajectory_rewards) > 0:
-                self.vae_storage.insert_trajectory(
-                    np.array(trajectory_obs),
-                    np.array(trajectory_actions),
-                    np.array(trajectory_next_obs),
-                    np.array(trajectory_rewards)
-                )
+            # Get final latents for next value
+            final_latents = []
+            for env_idx in range(self.args.num_envs):
+                if len(context_rewards[env_idx]) > 0:
+                    ctx_len = min(len(context_obs[env_idx]), max_context_len)
+                    ctx_o = jnp.array(context_obs[env_idx][-ctx_len:])[:, None, :]
+                    ctx_a = jnp.array(context_actions[env_idx][-ctx_len:])[:, None, :]
+                    ctx_r = jnp.array(context_rewards[env_idx][-ctx_len:])[:, None]
+                    mu, _ = self.encoder(ctx_o, ctx_a, ctx_r)
+                    final_latents.append(mu[0])
+                else:
+                    mu, _ = self.encoder.prior(1)
+                    final_latents.append(mu[0])
+            final_latents = jnp.stack(final_latents)
+            
+            # Update PPO
+            policy_loss, value_loss, entropy = self.update_ppo(obs, np.array(final_latents))
+            self.ppo_storage.after_update()
             
             # Update VAE
             vae_loss_value = 0.0
@@ -449,17 +682,15 @@ class MetaLearner:
             kl_value = 0.0
             if len(self.vae_storage.prev_state) >= self.args.vae_batch_num_trajs:
                 for _ in range(self.args.num_vae_updates):
-                    prev_obs, next_obs, actions, rewards = self.vae_storage.get_batch(self.args.vae_batch_num_trajs)
-                    
-                    mu, logvar = self.encoder(next_obs, actions, rewards)
+                    prev_obs_vae, next_obs_vae, actions_vae, rewards_vae = self.vae_storage.get_batch(self.args.vae_batch_num_trajs)
                     
                     def loss_fn(encoder):
-                        mu, logvar = encoder(next_obs, actions, rewards)
-                        return self.vae.compute_loss(mu, logvar, prev_obs, next_obs, actions, rewards)
+                        mu, logvar = encoder(next_obs_vae, actions_vae, rewards_vae)
+                        return self.vae.compute_loss(mu, logvar, prev_obs_vae, next_obs_vae, actions_vae, rewards_vae)
                     
                     grad_fn = nnx.value_and_grad(loss_fn, has_aux=True)
                     (total_loss, (rew_loss, kl)), grads = grad_fn(self.encoder)
-                    self.vae.optimizer.update(grads)
+                    self.vae.optimizer.update(self.encoder, grads)
                     
                     vae_loss_value = float(total_loss)
                     rew_loss_value = float(rew_loss)
@@ -468,17 +699,18 @@ class MetaLearner:
                 self.vae_losses.append(vae_loss_value)
             
             # Logging
+            iteration += 1
             if iteration % self.args.log_interval == 0:
                 elapsed = time.time() - self.start_time
                 fps = self.frames / elapsed if elapsed > 0 else 0
                 
                 mean_reward = np.mean(self.episode_rewards[-100:]) if self.episode_rewards else 0.0
                 mean_length = np.mean(self.episode_lengths[-100:]) if self.episode_lengths else 0.0
-                iter_mean_reward = np.mean(iter_rewards) if iter_rewards else 0.0
                 
                 if self.args.verbose:
                     print(f"Iter {iteration:3d} | Frames {self.frames:7d} | FPS {fps:6.0f} | "
-                          f"Mean Reward {mean_reward:7.2f} | Iter Reward {iter_mean_reward:7.2f} | "
+                          f"Mean Reward {mean_reward:7.2f} | "
+                          f"Policy Loss {policy_loss:7.4f} | Value Loss {value_loss:7.4f} | Entropy {entropy:7.4f} | "
                           f"VAE Loss {vae_loss_value:7.4f} | Rew Loss {rew_loss_value:7.4f} | KL {kl_value:7.4f}")
                 
                 # Wandb logging
@@ -489,7 +721,9 @@ class MetaLearner:
                         "fps": fps,
                         "mean_reward_100": mean_reward,
                         "mean_episode_length": mean_length,
-                        "iter_mean_reward": iter_mean_reward,
+                        "policy_loss": policy_loss,
+                        "value_loss": value_loss,
+                        "entropy": entropy,
                         "vae_loss": vae_loss_value,
                         "reward_loss": rew_loss_value,
                         "kl_divergence": kl_value,
@@ -512,12 +746,12 @@ class MetaLearner:
 
 def main():
     cfg = VariBADConfig()
-    cfg.num_frames = 1_000_000
-    cfg.num_envs = 16
-    cfg.policy_num_steps = 50
+    cfg.num_frames = 20_000_000  # 20M as in paper
+    cfg.num_envs = 32
+    cfg.policy_num_steps = 200
     cfg.verbose = True
     cfg.log_interval = 10
-    cfg.use_wandb = True  # Uncomment to enable wandb logging
+    cfg.use_wandb = True
     
     meta_learner = MetaLearner(cfg)
     meta_learner.train()
