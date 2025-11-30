@@ -50,12 +50,12 @@ class VariBADConfig:
     """
     # Env
     env_name: str = "HalfCheetahDir-v0"
-    num_envs: int = 32
+    num_envs: int = 16
     max_rollouts_per_task: int = 2
     
     # Training
-    num_frames: int = 1000000
-    policy_num_steps: int = 200
+    num_timesteps: int = 1000000
+    policy_num_steps: int = 800
     
     # VAE architecture
     latent_dim: int = 5
@@ -75,9 +75,9 @@ class VariBADConfig:
     task_decoder_layers: List[int] = field(default_factory=lambda: [64, 32])
     
     # VAE training
-    size_vae_buffer: int = 1000
-    vae_batch_num_trajs: int = 25
-    num_vae_updates: int = 3
+    size_vae_buffer: int = 10000
+    vae_batch_num_trajs: int = 10
+    num_vae_updates: int = 1
     lr_vae: float = 0.001
     kl_weight: float = 1.0
     rew_loss_coeff: float = 1.0
@@ -92,14 +92,14 @@ class VariBADConfig:
     
     # PPO
     lr_policy: float = 0.0007
-    policy_num_epochs: int = 2
-    policy_num_minibatch: int = 16
+    policy_num_epochs: int = 16
+    policy_num_minibatch: int = 4
     policy_gamma: float = 0.97
-    policy_tau: float = 0.95
+    policy_tau: float = 0.9
     policy_value_loss_coef: float = 0.5
     policy_entropy_coef: float = 0.01
     policy_max_grad_norm: float = 0.5
-    policy_clip_param: float = 0.2
+    policy_clip_param: float = 0.1
     
     # Misc
     seed: int = 73
@@ -458,7 +458,7 @@ class MetaLearner:
         # RNG key for sampling
         self.rng_key = key
         
-        self.frames = 0
+        self.timesteps = 0
         
         # Tracking
         self.episode_rewards = []
@@ -567,7 +567,7 @@ class MetaLearner:
         max_context_len = 50  # Limit context length for efficiency
         
         iteration = 0
-        while self.frames < self.args.num_frames:
+        while self.timesteps < self.args.num_timesteps:
             # Collect rollout
             trajectory_obs_all = []
             trajectory_actions_all = []
@@ -655,7 +655,7 @@ class MetaLearner:
                 trajectory_next_obs_all.append(next_obs)
                 
                 obs = next_obs
-                self.frames += self.args.num_envs
+                self.timesteps += self.args.num_envs
             
             # Get final latents for next value
             final_latents = []
@@ -702,13 +702,13 @@ class MetaLearner:
             iteration += 1
             if iteration % self.args.log_interval == 0:
                 elapsed = time.time() - self.start_time
-                fps = self.frames / elapsed if elapsed > 0 else 0
+                fps = self.timesteps / elapsed if elapsed > 0 else 0
                 
                 mean_reward = np.mean(self.episode_rewards[-100:]) if self.episode_rewards else 0.0
                 mean_length = np.mean(self.episode_lengths[-100:]) if self.episode_lengths else 0.0
                 
                 if self.args.verbose:
-                    print(f"Iter {iteration:3d} | Frames {self.frames:7d} | FPS {fps:6.0f} | "
+                    print(f"Iter {iteration:3d} | timesteps {self.timesteps:7d} | FPS {fps:6.0f} | "
                           f"Mean Reward {mean_reward:7.2f} | "
                           f"Policy Loss {policy_loss:7.4f} | Value Loss {value_loss:7.4f} | Entropy {entropy:7.4f} | "
                           f"VAE Loss {vae_loss_value:7.4f} | Rew Loss {rew_loss_value:7.4f} | KL {kl_value:7.4f}")
@@ -717,7 +717,7 @@ class MetaLearner:
                 if self.args.use_wandb and WANDB_AVAILABLE:
                     wandb.log({
                         "iteration": iteration,
-                        "frames": self.frames,
+                        "timesteps": self.timesteps,
                         "fps": fps,
                         "mean_reward_100": mean_reward,
                         "mean_episode_length": mean_length,
@@ -746,9 +746,7 @@ class MetaLearner:
 
 def main():
     cfg = VariBADConfig()
-    cfg.num_frames = 20_000_000  # 20M as in paper
-    cfg.num_envs = 32
-    cfg.policy_num_steps = 200
+    cfg.num_timesteps = 20_000_000  # 20M as in paper
     cfg.verbose = True
     cfg.log_interval = 10
     cfg.use_wandb = True
