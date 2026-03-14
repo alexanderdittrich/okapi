@@ -3,12 +3,10 @@ Running Statistics for Observation Normalization
 
 Implements Welford's online algorithm for tracking mean and standard deviation
 of observations during training. Critical for continuous control tasks.
-
-Based on Brax implementation:
-https://github.com/google/brax/blob/main/brax/training/acme/running_statistics.py
 """
 
-from typing import NamedTuple
+from typing import NamedTuple, Optional
+
 import jax
 import jax.numpy as jnp
 
@@ -94,7 +92,7 @@ def update(
 def normalize(
     batch: jax.Array,
     state: RunningStatisticsState,
-    max_abs_value: float = 5.0,
+    max_abs_value: Optional[float] = None,
 ) -> jax.Array:
     """Normalize data using running statistics.
 
