@@ -46,7 +46,7 @@ from flax import nnx
 from mujoco_playground import locomotion, dm_control_suite, wrapper
 from omegaconf import DictConfig, OmegaConf
 
-from rlx.common import running_statistics
+from rlx import running_statistics
 
 # Set GPU parameters
 xla_flags = os.environ.get("XLA_FLAGS", "")
