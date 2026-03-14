@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore", message=".*warp.math.*")
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from rlx.gymnasium.ppo import train, PPOConfig
+from rlx.gymnasium.ppo import PPOConfig, train
 
 
 def huzzah(cfg):

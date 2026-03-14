@@ -28,8 +28,8 @@ import optax
 import orbax.checkpoint as ocp
 from flax import nnx
 from mujoco_playground import registry, wrapper
-from rlx import running_statistics
 
+from rlx import running_statistics
 
 # ── Import model definitions from ppo.py ─────────────────────────────────────
 

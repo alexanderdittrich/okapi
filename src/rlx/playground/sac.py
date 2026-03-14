@@ -25,17 +25,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import yaml
-from tqdm import tqdm
-
-import orbax.checkpoint as ocp
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
+import orbax.checkpoint as ocp
 import wandb
+import yaml
 from flax import nnx
 from mujoco_playground import registry, wrapper
+from tqdm import tqdm
+
 from rlx.common import running_statistics
 
 xla_flags = os.environ.get("XLA_FLAGS", "")
@@ -61,21 +61,21 @@ class SACConfig:
     critic_lr: float = 3e-4
     alpha_lr: float = 3e-4
     gamma: float = 0.99
-    tau: float = 0.005             # Polyak soft-update coefficient
-    alpha: float = 0.2             # initial / fixed entropy coefficient
-    auto_tune_alpha: bool = True   # auto-tune α via dual gradient descent
+    tau: float = 0.005  # Polyak soft-update coefficient
+    alpha: float = 0.2  # initial / fixed entropy coefficient
+    auto_tune_alpha: bool = True  # auto-tune α via dual gradient descent
     target_entropy_scale: float = 1.0  # target_entropy = -action_dim * scale
     reward_scaling: float = 1.0
 
-    buffer_size: int = 1_048_576   # Brax max_replay_size
+    buffer_size: int = 1_048_576  # Brax max_replay_size
 
-    hidden_sizes: list[int] | None = None   # [256, 256] by default
+    hidden_sizes: list[int] | None = None  # [256, 256] by default
     activation: str = "relu"
 
     policy_obs_key: str = "state"
     value_obs_key: str = "privileged_state"
 
-    log_frequency: int = 1_000    # log every N global_steps
+    log_frequency: int = 1_000  # log every N global_steps
     eval_frequency: int = 10_000  # eval every N global_steps
     eval_episodes: int = 128
     checkpoint_frequency: int = 50_000  # 0 = off
@@ -144,9 +144,7 @@ class Actor(nnx.Module):
             - jnp.log(std)
             - 0.5 * jnp.log(2.0 * jnp.pi)
         ).sum(-1)
-        tanh_correction = (
-            2.0 * (jnp.log(2.0) - u - jax.nn.softplus(-2.0 * u))
-        ).sum(-1)
+        tanh_correction = (2.0 * (jnp.log(2.0) - u - jax.nn.softplus(-2.0 * u))).sum(-1)
         return action, log_prob_gaussian - tanh_correction
 
     def mode(self, obs: jax.Array) -> jax.Array:
@@ -289,15 +287,11 @@ def update_critic(
         q1_next = qf1_target(next_critic_obs, next_actions)
         q2_next = qf2_target(next_critic_obs, next_actions)
         min_q_next = jnp.minimum(q1_next, q2_next) - alpha * next_log_probs
-        target_q = jax.lax.stop_gradient(
-            rewards + (1.0 - dones) * gamma * min_q_next
-        )
+        target_q = jax.lax.stop_gradient(rewards + (1.0 - dones) * gamma * min_q_next)
 
         q1 = critics.qf1(critic_obs, actions)
         q2 = critics.qf2(critic_obs, actions)
-        loss = 0.5 * (
-            jnp.mean((q1 - target_q) ** 2) + jnp.mean((q2 - target_q) ** 2)
-        )
+        loss = 0.5 * (jnp.mean((q1 - target_q) ** 2) + jnp.mean((q2 - target_q) ** 2))
         return loss, {
             "loss/critic": loss,
             "diagnostics/q1_mean": q1.mean(),
@@ -503,6 +497,7 @@ def _write_metadata(run_dir: Path, run_id: str, cfg: SACConfig) -> None:
     def _ver(pkg: str) -> str:
         try:
             import importlib.metadata
+
             return importlib.metadata.version(pkg)
         except Exception:
             return "unknown"
@@ -713,15 +708,12 @@ def train(cfg: SACConfig, resume_from: str | None = None):
 
         def step(carry, _):
             state, returns, partial_returns, active = carry
-            norm_a = normalize_obs(
-                get_obs(state.obs, cfg.policy_obs_key), actor_stats
-            )
+            norm_a = normalize_obs(get_obs(state.obs, cfg.policy_obs_key), actor_stats)
             action = _actor.mode(norm_a)
             state = eval_env.step(state, action)
             returns = returns + state.reward * active
             partial_returns = {
-                k: partial_returns[k] + state.metrics[k] * active
-                for k in metric_keys
+                k: partial_returns[k] + state.metrics[k] * active for k in metric_keys
             }
             active = active * (1.0 - state.done.astype(jnp.float32))
             return (state, returns, partial_returns, active), None
@@ -793,9 +785,7 @@ def train(cfg: SACConfig, resume_from: str | None = None):
 
         # Separate termination from truncation for correct Bellman backup:
         # only mask future value for true terminations, not timeouts.
-        truncation = next_state.info.get(
-            "truncation", jnp.zeros_like(next_state.done)
-        )
+        truncation = next_state.info.get("truncation", jnp.zeros_like(next_state.done))
         termination = next_state.done * (1.0 - truncation)
 
         buffer.add_batch(
@@ -821,23 +811,45 @@ def train(cfg: SACConfig, resume_from: str | None = None):
             key, crit_key, act_key, alph_key = jax.random.split(key, 4)
 
             critic_metrics = update_critic(
-                actor, critics, qf1_target, qf2_target, critic_optimizer,
+                actor,
+                critics,
+                qf1_target,
+                qf2_target,
+                critic_optimizer,
                 batch["critic_obs"],
-                batch["next_actor_obs"], batch["next_critic_obs"],
-                batch["actions"], batch["rewards"], batch["dones"],
-                actor_stats, critic_stats, alpha_val, cfg.gamma, crit_key,
+                batch["next_actor_obs"],
+                batch["next_critic_obs"],
+                batch["actions"],
+                batch["rewards"],
+                batch["dones"],
+                actor_stats,
+                critic_stats,
+                alpha_val,
+                cfg.gamma,
+                crit_key,
             )
 
             actor_metrics = update_actor(
-                actor, critics, actor_optimizer,
-                batch["actor_obs"], batch["critic_obs"],
-                actor_stats, critic_stats, alpha_val, act_key,
+                actor,
+                critics,
+                actor_optimizer,
+                batch["actor_obs"],
+                batch["critic_obs"],
+                actor_stats,
+                critic_stats,
+                alpha_val,
+                act_key,
             )
 
             if cfg.auto_tune_alpha:
                 alpha_metrics = update_alpha(
-                    actor, alpha_module, alpha_optimizer,
-                    batch["actor_obs"], actor_stats, target_entropy, alph_key,
+                    actor,
+                    alpha_module,
+                    alpha_optimizer,
+                    batch["actor_obs"],
+                    actor_stats,
+                    target_entropy,
+                    alph_key,
                 )
                 alpha_val = alpha_module.value
             else:
@@ -851,9 +863,7 @@ def train(cfg: SACConfig, resume_from: str | None = None):
         if global_step % cfg.eval_frequency == 0:
             key, eval_key = jax.random.split(key)
             _, cur_actor_state = nnx.split(actor)
-            returns, partial_returns = evaluate(
-                cur_actor_state, actor_stats, eval_key
-            )
+            returns, partial_returns = evaluate(cur_actor_state, actor_stats, eval_key)
             eval_mean = float(returns.mean())
             eval_std = float(returns.std())
             eval_partial = {k: float(v.mean()) for k, v in partial_returns.items()}

@@ -24,16 +24,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
-import yaml
-from tqdm import tqdm
-
-import orbax.checkpoint as ocp
 import jax
 import jax.numpy as jnp
 import optax
+import orbax.checkpoint as ocp
 import wandb
+import yaml
 from flax import nnx
 from mujoco_playground import registry, wrapper
+from tqdm import tqdm
+
 from rlx.common import running_statistics
 
 xla_flags = os.environ.get("XLA_FLAGS", "")
@@ -189,8 +189,8 @@ class ActorCritic(nnx.Module):
 
 
 class Transition(NamedTuple):
-    actor_obs: jax.Array  # RAW un-normalised actor obs
-    critic_obs: jax.Array  # RAW un-normalised critic obs
+    actor_obs: jax.Array  # raw actor obs
+    critic_obs: jax.Array  # raw critic obs
     raw_action: jax.Array  # pre-tanh action
     logprob: jax.Array  # log π(raw_action) at collection time
     value: jax.Array  # V(s) at collection time
@@ -688,9 +688,9 @@ def train(cfg: PPOConfig, resume_from: str | None = None):
             critic_stats, flat(batch.critic_obs)
         )
 
-        # ── Bootstrap with UPDATED stats (matches Brax) ───────────────────
+        # ── Bootstrap with same stats used during collection ──────────────
         raw_c_final = get_obs(final_env_state.obs, cfg.value_obs_key)
-        bootstrap_value = model.get_value(normalize_obs(raw_c_final, new_critic_stats))
+        bootstrap_value = model.get_value(normalize_obs(raw_c_final, critic_stats))
 
         vs, advantages = compute_gae(
             batch.reward,
@@ -702,15 +702,15 @@ def train(cfg: PPOConfig, resume_from: str | None = None):
             cfg.gae_lambda,
         )
 
-        # ── Build dataset: normalise with UPDATED stats ───────────────────
+        # ── Build dataset
         flat_adv = flat(advantages)
         # NOTE: We normalize advantages per-minibatch instead of globally.
         # if cfg.norm_adv:
         #     flat_adv = (flat_adv - flat_adv.mean()) / (flat_adv.std() + 1e-8)
 
         dataset = (
-            normalize_obs(flat(batch.actor_obs), new_actor_stats),
-            normalize_obs(flat(batch.critic_obs), new_critic_stats),
+            normalize_obs(flat(batch.actor_obs), actor_stats),
+            normalize_obs(flat(batch.critic_obs), critic_stats),
             flat(batch.raw_action),
             flat(batch.logprob),
             flat_adv,

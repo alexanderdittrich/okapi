@@ -10,8 +10,8 @@ Usage:
 """
 
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -19,12 +19,11 @@ import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
+import orbax.checkpoint as ocp
 from flax import nnx
-
+from omegaconf import OmegaConf
 
 from rlx.gymnasium.ppo_vision import ActorCriticCNN, PPOVisionConfig, get_activation_fn
-import orbax.checkpoint as ocp
-from omegaconf import OmegaConf
 
 
 def load_model_from_checkpoint(checkpoint_dir: str):

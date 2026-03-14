@@ -39,7 +39,9 @@ def huzzah(cfg):
 # ---------------------------
 # Hydra Entry Point
 # ---------------------------
-@hydra.main(config_path="../configs", config_name="sac_playground.yaml", version_base="1.3")
+@hydra.main(
+    config_path="../configs", config_name="sac_playground.yaml", version_base="1.3"
+)
 def main(cfg: DictConfig):
     """Main entry point with Hydra config."""
     # Convert OmegaConf to dataclass

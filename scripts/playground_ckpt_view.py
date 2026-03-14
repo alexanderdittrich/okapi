@@ -65,7 +65,7 @@ from mujoco_playground import registry, wrapper
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from rlx.common import running_statistics
-from rlx.playground.ppo import ActorCritic, ACTIVATIONS
+from rlx.playground.ppo import ACTIVATIONS, ActorCritic
 
 os.environ["MUJOCO_GL"] = "glfw"
 
