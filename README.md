@@ -52,6 +52,9 @@ For benchmarking, we use the default parameters by `MuJoCo Playground` for dm_co
 ### Head tricks with Humanoid
 <a><img src="docs/head_tricks.gif" width="480"/></a>
 
+### Curriculum learning with Keeper and Striker Humanoids
+<a><img src="docs/penalties.gif" width="480"/></a>
+
 
 ## Passive Viewer - Visualization
 `Brax` and `MuJoCo Playground` do not support any interactive rendering out of the box. Usually rendering is done via notebooks and mediapy video generation, which can be tedious to use. [rscope](https://github.com/Andrew-Luo1/rscope) is a great tool which allows interactive visualization even remotely via `ssh`. We modified `rscope` to a single-script post-training checkpoint visualizer compatible with the checkpointing here. The visualizer runs on CPU and can be executed during on-going training.
@@ -62,18 +65,4 @@ uv run scripts/playground_ckpt_view.py run_dir="./checkpoints/<CKPT_DIR_PATH>"
 
 You can choose how many times each checkpoint should be evaluated and each checkpoint and evaluation rollout can be navigated directly in the visualizer via the arrow keys (←→↑↓).
 
-<a><img src="docs/viewer.png" style="display: block; margin-left: auto; margin-right: auto; width: 80%;"/></a>
-
-## Cite
-This framework is not meant as research-grade RL implementation, but if you nevertheless want to cite it:
-
-```bibtex
-@misc{dittrich2025rlx,
-  title={rlx: Deep Reinforcement Learning with JAX Flax NNX and MuJoCo Playground},
-  author={Dittrich, Alexander},
-  publisher={GitHub},
-  journal={GitHub repository},
-  howpublished={https://github.com/alexanderdittrich/rlx.git},
-  year={2026},
-}
-```
+<a><img src="docs/viewer.gif" style="display: block; margin-left: auto; margin-right: auto; width: 80%;"/></a>
