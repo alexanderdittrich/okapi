@@ -17,7 +17,7 @@ import numpy as np
 import optax
 from flax import nnx
 
-from rlx.gymnasium.ppo import ActorCritic, load_checkpoint
+from okapi.gymnasium.ppo import ActorCritic, load_checkpoint
 
 
 def replay_checkpoint(

@@ -9,20 +9,24 @@ warnings.filterwarnings("ignore", message=".*warp.math.*")
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from rlx.gymnasium.ppo import PPOConfig, train
+from okapi.gymnasium.ppo import PPOConfig, train
 
 
 def huzzah(cfg):
-    print()
-    print("               666                                     ")
-    print("              66666                 22                 ")
-    print("       88   999666                  22                 ")
-    print("    88888888     66        2222222  22   22   222      ")
-    print("    88888888     55555     222      22    222222       ")
-    print("      88888  55555555555   222      22     2222        ")
-    print("              5555555555   222      22   222  22       ")
-    print("               555555555   222      22  222    222     ")
-    print("                  555                                  ")
+    OKAPI_LOGO = r"""
+          JJJJJ     JJJJJ
+    JJJJJJ:::::JJJJJ:::::JJJJJJ
+    JJJJJJJ:::::JJJ::::::JJJJJJJ                666                                 6666
+    UUUUUUJJ:::::JJ:::::JJUUUUUU                666                                     
+    zzzzzzzzzJJ::::::JJzzzzzzzzz    666666666   666  6666    66666666   666666666    666
+    zzzzzzzzJ:::::::::YJzzzzzzzz   666    6666  666666       66666666   666    666   666
+    zzzzzzzJJ::JJ::JJ::Jzzzzzzzz   6666   666   666  6666  6666   666   666   6666   666
+    zzzzzzzzJ::::::::::Jzzzzzzzz     666666     666    666   66666666   66666666     666
+    zzzzzzzzJJ::::::::Jzzzzzzzzz                                        666             
+    zzzzzzzzzzJ::JJ:JJzzzzzzzzz
+        JJJJJJJJJ::JJJJJJJJJ
+    """
+    print(OKAPI_LOGO)
     print("\n" + "=" * 54)
     print(f"  Algorithm: \t\tPPO")
     print(f"  Environment: \t\t{cfg.env_id}")

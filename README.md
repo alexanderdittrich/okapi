@@ -1,5 +1,5 @@
-# rlx: Deep Reinforcement Learning with JAX Flax NNX and MuJoCo Playground
-<a><img src="docs/rlx.png" width="240" align="right"/></a>
+# okapi: Deep Reinforcement Learning with JAX Flax NNX and MuJoCo Playground
+<a><img src="docs/okapi.png" width="240" align="right"/></a>
 
 This repository provides high-performing implementation of PPO for JAX Flax NNX and MuJoCo Playground. The implementation is a partial adaptation of Brax PPO. However, unlike `Brax` it uses simple single-file implementations and the more readable Flax NNX API instead of Flax Linen.
 

@@ -23,7 +23,7 @@ import orbax.checkpoint as ocp
 from flax import nnx
 from omegaconf import OmegaConf
 
-from rlx.gymnasium.ppo_vision import ActorCriticCNN, PPOVisionConfig, get_activation_fn
+from okapi.gymnasium.ppo_vision import ActorCriticCNN, PPOVisionConfig, get_activation_fn
 
 
 def load_model_from_checkpoint(checkpoint_dir: str):

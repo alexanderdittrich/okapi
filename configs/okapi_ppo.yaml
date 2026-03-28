@@ -1,0 +1,63 @@
+# PPO training configuration — maps 1-to-1 onto PPOConfig in src/rlx/ppo.py
+hydra:
+  verbose: false
+  run:
+    dir: .
+  job_logging:
+    root:
+      level: WARNING  # Set this to ERROR to reduce even more logs
+  output_subdir: null
+
+# ── Environment ───────────────────────────────────────────────────────────────
+env_id: Go1JoystickFlatTerrain
+num_envs: 8192
+
+# ── Rollout ───────────────────────────────────────────────────────────────────
+total_timesteps: 200_000_000
+num_steps: 20           # unroll length per env per iteration
+num_minibatches: 32     # rollout_buffer_size (num_envs*num_steps) split into this many minibatches
+update_epochs: 4        # PPO epochs per iteration
+warmup_stats: true      # prime running stats before gradient updates
+
+# ── PPO losses ────────────────────────────────────────────────────────────────
+learning_rate: 3e-4
+gamma: 0.97
+gae_lambda: 0.95
+clip_coef: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+max_grad_norm: 1.0
+reward_scaling: 1.0
+norm_adv: true
+
+# ── Network architecture ──────────────────────────────────────────────────────
+actor_hidden_sizes: [512, 256, 128]
+critic_hidden_sizes: [512, 256, 128]
+activation: swish       # tanh | relu | swish | elu | gelu
+
+# ── Observation keys (must match env obs dict) ────────────────────────────────
+policy_obs_key: state
+value_obs_key: privileged_state
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+log_frequency: 10       # print metrics every N iterations
+eval_frequency: 50      # run eval rollout every N iterations
+eval_episodes: 128
+use_wandb: false
+use_checkpointing: false
+wandb_project: mjxrl_rlx
+verbose: true
+progress_bar: false
+use_domain_randomization: false
+
+
+# ── Checkpointing ─────────────────────────────────────────────────────────────
+# Checkpoints are saved under {checkpoint_dir}/{run_id}/ckpt_{step}/
+checkpoint_dir: checkpoints
+checkpoint_frequency: 100   # save every N iterations  (0 = disabled)
+
+# ── Environment overrides (passed as config_overrides to registry.load) ───────
+env_overrides: {}
+
+# ── Reproducibility ───────────────────────────────────────────────────────────
+seed: 42
