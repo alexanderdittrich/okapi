@@ -62,7 +62,7 @@ class PPOConfig:
     clip_coef: float = 0.2
     ent_coef: float = 0.01
     vf_coef: float = 0.5
-    max_grad_norm: float = 1.0
+    max_grad_norm: float | None = 1.0
     reward_scaling: float = 1.0
     norm_adv: bool = True
 
@@ -528,14 +528,10 @@ def train(
         activation=ACTIVATIONS[cfg.activation],
         rngs=nnx.Rngs(model_key),
     )
-    optimizer = nnx.Optimizer(
-        model=model,
-        tx=optax.chain(
-            optax.clip_by_global_norm(cfg.max_grad_norm),
-            optax.adam(learning_rate=cfg.learning_rate, eps=1e-5),
-        ),
-        wrt=nnx.Param,
-    )
+    tx = optax.adam(learning_rate=cfg.learning_rate, eps=1e-5)
+    if cfg.max_grad_norm is not None:
+        tx = optax.chain(optax.clip_by_global_norm(cfg.max_grad_norm), tx)
+    optimizer = nnx.Optimizer(model=model, tx=tx, wrt=nnx.Param)
 
     graphdef, _ = nnx.split((model, optimizer))
     _, combined_state = nnx.split((model, optimizer))
