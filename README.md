@@ -34,11 +34,17 @@ uv run scripts/playground_ppo_train.py env_id=Go1JoystickWalk num_train_steps=20
 ```
 
 ## Benchmarks
-For benchmarking, we use the default parameters by `MuJoCo Playground` for dm_control tasks and locomotion tasks. We run each task for 5 different random seeds on a `NVIDIA 4080 Super`-GPU.
+For benchmarking, we use the default parameters by `MuJoCo Playground` for dm_control tasks and locomotion tasks. We run each task for 10 different random seeds on a `NVIDIA 4080 Super`-GPU.
 
 ### Performance comparison
 
-### Computing time
+<img src="docs/benchmark_performance.png" width="760"/>
+
+### Training time
+
+<img src="docs/benchmark_runtime.png" width="456"/>
+
+
 
 ## Showcase Tasks
 [Goncalog](https://github.com/goncalog/ai-robotics) presented very nice football-inspired tasks. We transfered the tasks to the `MuJoCo Playground` API and added them in the `/examples`-folder and as a showcase for the functionality of the training algorithm beyond benchmarks.
