@@ -34,7 +34,7 @@ def huzzah(cfg):
     """
     print(OKAPI_LOGO)
     print("\n" + "=" * 54)
-    print(f"  Algorithm: \t\tSAC")
+    print("  Algorithm: \t\tSAC")
     print(f"  Environment: \t\t{cfg.env_id}")
     print(f"  # envs: \t\t{cfg.num_envs:,}")
     print(f"  # timesteps: \t\t{cfg.total_timesteps:,}")
@@ -46,9 +46,7 @@ def huzzah(cfg):
 # ---------------------------
 # Hydra Entry Point
 # ---------------------------
-@hydra.main(
-    config_path="../configs", config_name="okapi_sac", version_base="1.3"
-)
+@hydra.main(config_path="../configs", config_name="okapi_sac", version_base="1.3")
 def main(cfg: DictConfig):
     """Main entry point with Hydra config."""
     # Convert OmegaConf to dataclass

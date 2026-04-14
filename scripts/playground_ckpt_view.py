@@ -277,7 +277,7 @@ def main():
             # ── text overlay (top-left corner, like rscope) ──────────────
             gstep, ev = rollouts[ci[0]]
             nf = len(ev[ei[0]][0])
-            left = f"Checkpoint\nEval\nFrame"
+            left = "Checkpoint\nEval\nFrame"
             right = (
                 f"{ci[0] + 1}/{len(steps)}  (step {gstep:,})\n"
                 f"{ei[0] + 1}/{args.evals}\n"

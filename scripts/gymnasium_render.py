@@ -108,7 +108,7 @@ def replay_checkpoint(
         global_step, num_updates, loaded_key = load_checkpoint(
             checkpoint_path, model, optimizer
         )
-        print(f"✅ Loaded checkpoint:")
+        print("✅ Loaded checkpoint:")
         print(f"   - Global step: {global_step}")
         print(f"   - Updates: {num_updates}")
     except Exception as e:
@@ -183,7 +183,7 @@ def replay_checkpoint(
     print(f"Checkpoint: {checkpoint_path}")
     print(f"Global step: {global_step}")
     print(f"Updates: {num_updates}")
-    print(f"\nPerformance:")
+    print("\nPerformance:")
     print(
         f"  Average Return: {np.mean(episode_returns):.2f} ± {np.std(episode_returns):.2f}"
     )

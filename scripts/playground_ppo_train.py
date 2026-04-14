@@ -34,13 +34,14 @@ def huzzah(cfg):
     """
     print(OKAPI_LOGO)
     print("\n" + "=" * 54)
-    print(f"  Algorithm: \t\tPPO")
+    print("  Algorithm: \t\tPPO")
     print(f"  Environment: \t\t{cfg.env_id}")
     print(f"  # envs: \t\t{cfg.num_envs:,}")
     print(f"  # timesteps: \t\t{cfg.total_timesteps:,}")
     print(f"  # epochs: \t\t{cfg.num_iterations:,}")
     print(f"  Random Seed: \t\t{cfg.seed:,}")
     print("=" * 54 + "\n")
+
 
 # ---------------------------
 # Hydra Entry Point

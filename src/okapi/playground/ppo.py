@@ -189,11 +189,11 @@ class ActorCritic(nnx.Module):
 
 
 class Transition(NamedTuple):
-    actor_obs: jax.Array  # raw actor obs
-    critic_obs: jax.Array  # raw critic obs
+    actor_obs: jax.Array  # raw actor obs at t
+    critic_obs: jax.Array  # raw critic obs at t
+    next_critic_obs: jax.Array  # raw critic obs at t+1 (for GAE bootstrap)
     raw_action: jax.Array  # pre-tanh action
     logprob: jax.Array  # log π(raw_action) at collection time
-    value: jax.Array  # V(s) at collection time
     reward: jax.Array  # scaled reward
     done: jax.Array  # episode done flag
     truncation: jax.Array  # timeout flag
@@ -661,7 +661,7 @@ def train(
             raw_c = get_obs(env_state.obs, cfg.value_obs_key)
 
             # Normalise with current (pre-update) stats for action selection
-            dist, value = model(
+            dist, _ = model(
                 normalize_obs(raw_a, actor_stats), normalize_obs(raw_c, critic_stats)
             )
             raw_action = dist.sample_raw(seed=action_key)
@@ -672,13 +672,14 @@ def train(
             truncation = next_state.info.get(
                 "truncation", jnp.zeros_like(next_state.done)
             )
+            next_raw_c = get_obs(next_state.obs, cfg.value_obs_key)
 
             return (next_state, step_key), Transition(
-                actor_obs=raw_a,  # store RAW
-                critic_obs=raw_c,  # store RAW
+                actor_obs=raw_a,
+                critic_obs=raw_c,
+                next_critic_obs=next_raw_c,
                 raw_action=raw_action,
                 logprob=logprob,
-                value=value,
                 reward=next_state.reward * cfg.reward_scaling,
                 done=next_state.done,
                 truncation=truncation,
@@ -695,62 +696,80 @@ def train(
             critic_stats, flat(batch.critic_obs)
         )
 
-        # ── Bootstrap with same stats used during collection ──────────────
-        raw_c_final = get_obs(final_env_state.obs, cfg.value_obs_key)
-        bootstrap_value = model.get_value(normalize_obs(raw_c_final, critic_stats))
-
-        vs, advantages = compute_gae(
-            batch.reward,
-            batch.value,
-            batch.done,
-            batch.truncation,
-            bootstrap_value,
-            cfg.gamma,
-            cfg.gae_lambda,
-        )
-
-        # ── Build dataset
-        flat_adv = flat(advantages)
-        # NOTE: We normalize advantages per-minibatch instead of globally.
-        # if cfg.norm_adv:
-        #     flat_adv = (flat_adv - flat_adv.mean()) / (flat_adv.std() + 1e-8)
-
-        dataset = (
-            normalize_obs(flat(batch.actor_obs), actor_stats),
-            normalize_obs(flat(batch.critic_obs), critic_stats),
-            flat(batch.raw_action),
-            flat(batch.logprob),
-            flat_adv,
-            flat(vs),
-        )
-
-        # ── PPO epochs ────────────────────────────────────────────────────
+        # ── PPO epochs — GAE recomputed per minibatch (Brax-style) ───────
+        # Environments are shuffled (not flat samples) so each minibatch
+        # receives coherent T-step trajectories for correct GAE computation.
+        mb_size = cfg.num_envs // cfg.num_minibatches
         _, current_state = nnx.split((model, optimizer))
 
         def run_epoch(carry, _):
             state, epoch_key = carry
             epoch_key, perm_key, loss_key = jax.random.split(epoch_key, 3)
-            perm = jax.random.permutation(perm_key, cfg.rollout_buffer_size)
-            minibatches = jax.tree.map(
-                lambda x: x[perm].reshape(
-                    cfg.num_minibatches, cfg.batch_size, *x.shape[1:]
-                ),
-                dataset,
-            )
 
-            def run_minibatch(carry, mb):
+            # Permute along the environment axis, keeping time intact.
+            perm = jax.random.permutation(perm_key, cfg.num_envs)
+
+            def make_minibatches(x):
+                # [T, N, ...] → permute N → split into [num_mb, T, mb_size, ...]
+                x_perm = x[:, perm]
+                x_split = x_perm.reshape(
+                    cfg.num_steps, cfg.num_minibatches, mb_size, *x.shape[2:]
+                )
+                return jnp.moveaxis(x_split, 1, 0)
+
+            minibatches = jax.tree.map(make_minibatches, batch)
+
+            def run_minibatch(carry, traj):
+                # traj: Transition with shapes [T, mb_size, ...]
                 state, mb_key = carry
                 mb_key, step_key = jax.random.split(mb_key)
                 m, o = nnx.merge(graphdef, state)
 
-                # Normalize advantages per-minibatch comparable to Brax.
-                a_obs, c_obs, raw_act, old_lp, adv, ret = mb
+                T, mb = cfg.num_steps, mb_size
+
+                # Normalise with updated stats
+                norm_a = normalize_obs(
+                    traj.actor_obs.reshape(T * mb, -1), new_actor_stats
+                )
+                norm_c = normalize_obs(
+                    traj.critic_obs.reshape(T * mb, -1), new_critic_stats
+                )
+
+                # Recompute values with current model
+                _, flat_values = m(norm_a, norm_c)
+                values = flat_values.reshape(T, mb)
+
+                # Bootstrap from next obs after the last step
+                norm_next_c = normalize_obs(traj.next_critic_obs[-1], new_critic_stats)
+                bootstrap_value = m.get_value(norm_next_c)
+
+                vs, advantages = compute_gae(
+                    traj.reward,
+                    values,
+                    traj.done,
+                    traj.truncation,
+                    bootstrap_value,
+                    cfg.gamma,
+                    cfg.gae_lambda,
+                )
+
+                flat_adv = advantages.reshape(T * mb)
                 if cfg.norm_adv:
-                    adv = (adv - adv.mean()) / (adv.std() + 1e-8)
-                mb = (a_obs, c_obs, raw_act, old_lp, adv, ret)
+                    flat_adv = (flat_adv - flat_adv.mean()) / (flat_adv.std() + 1e-8)
 
                 metrics = update_minibatch(
-                    m, o, *mb, cfg.clip_coef, cfg.vf_coef, cfg.ent_coef, step_key
+                    m,
+                    o,
+                    norm_a,
+                    norm_c,
+                    traj.raw_action.reshape(T * mb, -1),
+                    traj.logprob.reshape(T * mb),
+                    flat_adv,
+                    vs.reshape(T * mb),
+                    cfg.clip_coef,
+                    cfg.vf_coef,
+                    cfg.ent_coef,
+                    step_key,
                 )
                 _, new_state = nnx.split((m, o))
                 return (new_state, mb_key), metrics
