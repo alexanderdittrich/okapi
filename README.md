@@ -38,11 +38,11 @@ For benchmarking, we use the default parameters by `MuJoCo Playground` for dm_co
 
 ### Performance comparison
 
-<img src="docs/benchmark_performance.png" width="760"/>
+<img src="docs/benchmark_performance.png" width="850"/>
 
 ### Training time
 
-<img src="docs/benchmark_runtime.png" width="456"/>
+<img src="docs/benchmark_runtime.png" width="850"/>
 
 
 
