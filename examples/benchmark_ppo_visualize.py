@@ -93,7 +93,7 @@ def plot_runtime(ax, data):
     envs = list(data.keys())
     titles = [TITLES.get(e, e) for e in envs]
     x = np.arange(len(envs))
-    width = 0.35
+    width = 0.25
 
     brax_means = np.array([np.mean(data[e]["brax_times"]) / 60 for e in envs])
     brax_stds = np.array([np.std(data[e]["brax_times"]) / 60 for e in envs])
@@ -173,18 +173,13 @@ def main():
     print(f"Saved {OUT_PATH}")
 
     # ── Runtime comparison ────────────────────────────────────────────────
-    # Width chosen to fit bar groups; fonts scaled up to stay comparable
-    # with the summary when both are displayed at their natural sizes.
-    summary_w = ncols * 2.5
-    runtime_w = len(envs) * 0.9
-    font_scale = summary_w / runtime_w
-    with plt.rc_context({"font.size": plt.rcParams["font.size"] * font_scale}):
-        fig2, ax2 = plt.subplots(figsize=(runtime_w, nrows * 2 / nrows))
-        plot_runtime(ax2, {e: data[e] for e in envs})
-        fig2.tight_layout()
-        runtime_path = OUT_PATH.parent / "benchmark_runtime.png"
-        fig2.savefig(runtime_path, dpi=500, bbox_inches="tight")
-        print(f"Saved {runtime_path}")
+    runtime_w = min(len(envs) * 1.2, 10.0)
+    fig2, ax2 = plt.subplots(figsize=(runtime_w, 2.5))
+    plot_runtime(ax2, {e: data[e] for e in envs})
+    fig2.tight_layout()
+    runtime_path = OUT_PATH.parent / "benchmark_runtime.png"
+    fig2.savefig(runtime_path, dpi=500, bbox_inches="tight")
+    print(f"Saved {runtime_path}")
 
 
 if __name__ == "__main__":

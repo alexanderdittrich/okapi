@@ -47,6 +47,12 @@ ENVS = [
 ]
 NUM_SEEDS = 1  # seeds used: 0, 1, ..., NUM_SEEDS-1
 
+# Override total timesteps for envs that need longer training (scales num_evals proportionally)
+TIMESTEP_OVERRIDES = {
+    "HopperHop": 150_000_000,
+    "HumanoidRun": 180_000_000,
+}
+
 RUN_OKAPI_MJX = True
 RUN_OKAPI_WARP = True
 RUN_BRAX_MJX = False
@@ -179,6 +185,10 @@ def run_group(env_names, seeds):
     for env_name in env_names:
         print(f"\n{'=' * 60}\n  {env_name}  (seeds={seeds})\n{'=' * 60}")
         bc = get_playground_config(env_name)
+        if env_name in TIMESTEP_OVERRIDES:
+            scale = TIMESTEP_OVERRIDES[env_name] / bc.num_timesteps
+            bc.num_timesteps = TIMESTEP_OVERRIDES[env_name]
+            bc.num_evals = max(1, round(bc.num_evals * scale))
 
         def load():
             return json.loads(data_path.read_text()) if data_path.exists() else {}
@@ -199,7 +209,6 @@ def run_group(env_names, seeds):
                 wandb.init(
                     project=WANDB_PROJECT,
                     name=f"okapi-mjx-{env_name}-seed-{seed}",
-                    entity="tensegrity",
                     config=vars(cfg),
                     tags=["okapi", "mjx", env_name],
                 )
@@ -236,7 +245,6 @@ def run_group(env_names, seeds):
                 wandb.init(
                     project=WANDB_PROJECT,
                     name=f"brax-mjx-{env_name}-seed-{seed}",
-                    entity="tensegrity",
                     config={**dict(bc), "seed": seed},
                     tags=["brax", "mjx", env_name],
                 )
