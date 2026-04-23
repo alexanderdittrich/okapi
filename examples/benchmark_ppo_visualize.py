@@ -51,11 +51,18 @@ OKAPI_WARP_COLOR = "#6a9ec4ff"
 
 def load_curves(seed_list):
     """Return (xs, ys) dropping any seed that contains NaN rewards."""
+    if not seed_list:
+        return np.array([]), np.empty((0, 0)), 0
+
     valid = []
     for seed in seed_list:
         rewards = [r for _, r in seed]
         if not any(np.isnan(r) for r in rewards):
             valid.append(seed)
+
+    if not valid:
+        return np.array([]), np.empty((0, 0)), 0
+
     xs = np.array([s for s, _ in valid[0]])
     ys = np.array([[r for _, r in c] for c in valid])
     return xs, ys, len(valid)
@@ -64,17 +71,22 @@ def load_curves(seed_list):
 def plot_env(ax, env, data):
     r = data[env]
 
-    brax_xs, brax_ys, n_brax = load_curves(r["brax_seeds"])
-    okapi_xs, okapi_ys, n_okapi = load_curves(r["okapi_seeds"])
+    series = []
 
-    series = [
-        (brax_xs, brax_ys, n_brax, f"Brax MJX (n={n_brax})", BRAX_COLOR),
-        (okapi_xs, okapi_ys, n_okapi, f"Okapi MJX (n={n_okapi})", OKAPI_COLOR),
-    ]
+    if "brax_seeds" in r:
+        brax_xs, brax_ys, n_brax = load_curves(r["brax_seeds"])
+        if n_brax > 0:
+            series.append((brax_xs, brax_ys, n_brax, f"Brax MJX (n={n_brax})", BRAX_COLOR))
+
+    if "okapi_seeds" in r:
+        okapi_xs, okapi_ys, n_okapi = load_curves(r["okapi_seeds"])
+        if n_okapi > 0:
+            series.append((okapi_xs, okapi_ys, n_okapi, f"Okapi MJX (n={n_okapi})", OKAPI_COLOR))
 
     if "okapi_warp_seeds" in r:
         warp_xs, warp_ys, n_warp = load_curves(r["okapi_warp_seeds"])
-        series.append((warp_xs, warp_ys, n_warp, f"Okapi Warp (n={n_warp})", OKAPI_WARP_COLOR))
+        if n_warp > 0:
+            series.append((warp_xs, warp_ys, n_warp, f"Okapi Warp (n={n_warp})", OKAPI_WARP_COLOR))
 
     for xs, ys, n, label, color in series:
         mean = ys.mean(0)
@@ -85,7 +97,10 @@ def plot_env(ax, env, data):
     ax.set_title(TITLES[env])
     ax.set_xlabel("Steps (M)")
     ax.set_ylabel("Episode reward")
-    ax.legend(fontsize=5, frameon=True)
+    if series:
+        ax.legend(fontsize=5, frameon=True)
+    else:
+        ax.text(0.5, 0.5, "No valid curves", transform=ax.transAxes, ha="center", va="center", fontsize=7)
     ax.grid(alpha=0.3)
 
 
@@ -95,47 +110,49 @@ def plot_runtime(ax, data):
     x = np.arange(len(envs))
     width = 0.25
 
-    brax_means = np.array([np.mean(data[e]["brax_times"]) / 60 for e in envs])
-    brax_stds = np.array([np.std(data[e]["brax_times"]) / 60 for e in envs])
-    okapi_means = np.array([np.mean(data[e]["okapi_times"]) / 60 for e in envs])
-    okapi_stds = np.array([np.std(data[e]["okapi_times"]) / 60 for e in envs])
+    def _mean_std_minutes(times):
+        if not times:
+            return np.nan, np.nan
+        arr = np.asarray(times, dtype=float)
+        return float(np.mean(arr) / 60), float(np.std(arr) / 60)
+
+    brax_stats = [_mean_std_minutes(data[e].get("brax_times")) for e in envs]
+    brax_means = np.array([m for m, _ in brax_stats])
+    brax_stds = np.array([s for _, s in brax_stats])
+
+    okapi_stats = [_mean_std_minutes(data[e].get("okapi_times")) for e in envs]
+    okapi_means = np.array([m for m, _ in okapi_stats])
+    okapi_stds = np.array([s for _, s in okapi_stats])
 
     has_warp = any("okapi_warp_times" in data[e] for e in envs)
-    n_bars = 3 if has_warp else 2
+    series = []
+    if np.any(~np.isnan(brax_means)):
+        series.append(("Brax MJX", BRAX_COLOR, brax_means, brax_stds))
+    if np.any(~np.isnan(okapi_means)):
+        series.append(("Okapi MJX", OKAPI_COLOR, okapi_means, okapi_stds))
+
+    if has_warp:
+        warp_stats = [_mean_std_minutes(data[e].get("okapi_warp_times")) for e in envs]
+        warp_means = np.array([m for m, _ in warp_stats])
+        warp_stds = np.array([s for _, s in warp_stats])
+        if np.any(~np.isnan(warp_means)):
+            series.append(("Okapi Warp", OKAPI_WARP_COLOR, warp_means, warp_stds))
+
+    n_bars = len(series)
+    if n_bars == 0:
+        ax.text(0.5, 0.5, "No runtime data", transform=ax.transAxes, ha="center", va="center", fontsize=7)
+        return
+
     offsets = np.linspace(-width * (n_bars - 1) / 2, width * (n_bars - 1) / 2, n_bars)
 
-    ax.bar(
-        x + offsets[0],
-        brax_means,
-        width,
-        yerr=brax_stds,
-        label="Brax MJX",
-        color=BRAX_COLOR,
-        alpha=0.85,
-        capsize=2,
-        error_kw={"linewidth": 0.8},
-    )
-    ax.bar(
-        x + offsets[1],
-        okapi_means,
-        width,
-        yerr=okapi_stds,
-        label="Okapi MJX",
-        color=OKAPI_COLOR,
-        alpha=0.85,
-        capsize=2,
-        error_kw={"linewidth": 0.8},
-    )
-    if has_warp:
-        warp_means = np.array([np.mean(data[e]["okapi_warp_times"]) / 60 if "okapi_warp_times" in data[e] else 0.0 for e in envs])
-        warp_stds = np.array([np.std(data[e]["okapi_warp_times"]) / 60 if "okapi_warp_times" in data[e] else 0.0 for e in envs])
+    for i, (label, color, means, stds) in enumerate(series):
         ax.bar(
-            x + offsets[2],
-            warp_means,
+            x + offsets[i],
+            means,
             width,
-            yerr=warp_stds,
-            label="Okapi Warp",
-            color=OKAPI_WARP_COLOR,
+            yerr=stds,
+            label=label,
+            color=color,
             alpha=0.85,
             capsize=2,
             error_kw={"linewidth": 0.8},

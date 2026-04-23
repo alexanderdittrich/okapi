@@ -17,6 +17,21 @@ from mujoco_playground.config import (
 )
 from brax.training.agents.ppo import train as brax_ppo
 from brax.training.agents.ppo import networks as ppo_networks
+import jax
+
+if not hasattr(jax, "device_put_replicated"):
+    import numpy as _np
+    import jax.numpy as _jnp
+
+    def _device_put_replicated(x, devices):
+        n = len(devices)
+        mesh = jax.sharding.Mesh(_np.array(devices), ("devices",))
+        # Partition along first axis so each device holds one slice of shape (1, ...)
+        sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("devices"))
+        stacked = jax.tree_util.tree_map(lambda v: _jnp.stack([v] * n), x)
+        return jax.device_put(stacked, sharding)
+
+    jax.device_put_replicated = _device_put_replicated
 
 from okapi.playground.ppo import PPOConfig, train as okapi_train
 
@@ -30,22 +45,22 @@ DOCS_DIR = Path("docs")
 ENVS = [
     # DM Control Suite
     "CheetahRun",
-    # "FishSwim",
-    # "HopperHop",
-    # "WalkerRun",
-    # "HumanoidRun",
-    # "CartpoleSwingup",
+    "FishSwim",
+    "HopperHop",
+    "WalkerRun",
+    "HumanoidRun",
+    "CartpoleSwingup",
     # Locomotion
     "BarkourJoystick",
-    # "BerkeleyHumanoidJoystickFlatTerrain",
+    "BerkeleyHumanoidJoystickFlatTerrain",
     "Go1JoystickFlatTerrain",
-    # "G1JoystickFlatTerrain",
+    "G1JoystickFlatTerrain",
     # Manipulation
-    # "AlohaHandOver",
-    # "LeapCubeReorient",
-    # "PandaPickCubeCartesian",
+    "AlohaHandOver",
+    "LeapCubeReorient",
+    "PandaPickCubeCartesian",
 ]
-NUM_SEEDS = 1  # seeds used: 0, 1, ..., NUM_SEEDS-1
+NUM_SEEDS = 8  # seeds used: 0, 1, ..., NUM_SEEDS-1
 
 # Override total timesteps for envs that need longer training (scales num_evals proportionally)
 TIMESTEP_OVERRIDES = {
@@ -55,7 +70,7 @@ TIMESTEP_OVERRIDES = {
 
 RUN_OKAPI_MJX = True
 RUN_OKAPI_WARP = True
-RUN_BRAX_MJX = False
+RUN_BRAX_MJX = True
 RUN_BRAX_WARP = False
 
 
@@ -87,6 +102,13 @@ def brax_to_okapi(env_name, bc, seed, impl="jax"):
     num_steps = bc.unroll_length
     num_minibatches = bc.num_minibatches
 
+    # Brax collects (batch_size * num_minibatches // num_envs) rollout rounds per
+    # training step before running num_updates_per_batch SGD epochs. Okapi collects
+    # only 1 round per iteration, so scale down the epochs proportionally to keep
+    # the same number of gradient updates per environment sample.
+    brax_rollout_rounds = max(1, bc.batch_size * bc.num_minibatches // bc.num_envs)
+    update_epochs = max(1, bc.num_updates_per_batch // brax_rollout_rounds)
+
     log_freq = 10
     total_iters = bc.num_timesteps // (bc.num_envs * num_steps)
     eval_freq = max(log_freq, (total_iters // bc.num_evals // log_freq) * log_freq)
@@ -97,7 +119,7 @@ def brax_to_okapi(env_name, bc, seed, impl="jax"):
         total_timesteps=bc.num_timesteps,
         num_steps=num_steps,
         num_minibatches=num_minibatches,
-        update_epochs=bc.num_updates_per_batch,
+        update_epochs=update_epochs,
         learning_rate=bc.learning_rate,
         gamma=bc.discounting,
         gae_lambda=0.95,
@@ -227,7 +249,6 @@ def run_group(env_names, seeds):
                 wandb.init(
                     project=WANDB_PROJECT,
                     name=f"okapi-warp-{env_name}-seed-{seed}",
-                    entity="tensegrity",
                     config=vars(cfg),
                     tags=["okapi", "warp", env_name],
                 )
@@ -262,7 +283,6 @@ def run_group(env_names, seeds):
                 wandb.init(
                     project=WANDB_PROJECT,
                     name=f"brax-warp-{env_name}-seed-{seed}",
-                    entity="tensegrity",
                     config={**dict(bc), "seed": seed},
                     tags=["brax", "warp", env_name],
                 )
