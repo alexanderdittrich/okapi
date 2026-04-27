@@ -53,6 +53,7 @@ class PPOConfig:
 
     total_timesteps: int = 200_000_000
     num_steps: int = 20  # unroll_length
+    num_rollout_rounds: int = 1  # rollout rounds collected before each SGD pass (Brax: batch_size*num_minibatches//num_envs)
     num_minibatches: int = 32  # matches Brax default
     update_epochs: int = 4  # num_updates_per_batch
 
@@ -94,7 +95,7 @@ class PPOConfig:
             self.actor_hidden_sizes = [512, 256, 128]
         if self.critic_hidden_sizes is None:
             self.critic_hidden_sizes = [512, 256, 128]
-        self.rollout_buffer_size = self.num_envs * self.num_steps
+        self.rollout_buffer_size = self.num_envs * self.num_steps * self.num_rollout_rounds
         self.batch_size = self.rollout_buffer_size // self.num_minibatches
         self.num_iterations = self.total_timesteps // self.rollout_buffer_size
 
@@ -578,7 +579,7 @@ def train(
             _, (raw_as, raw_cs) = jax.lax.scan(
                 _step, (env_state, key), None, length=cfg.num_steps
             )
-            flat = lambda x: x.reshape(cfg.rollout_buffer_size, *x.shape[2:])
+            flat = lambda x: x.reshape(cfg.num_envs * cfg.num_steps, *x.shape[2:])
             return (
                 running_statistics.update(actor_stats, flat(raw_as)),
                 running_statistics.update(critic_stats, flat(raw_cs)),
@@ -652,7 +653,10 @@ def train(
         model, optimizer = nnx.merge(graphdef, combined_state)
         key, rollout_key, update_key = jax.random.split(key, 3)
 
-        # ── Collect rollout — store RAW obs ───────────────────────────────
+        # ── Collect num_rollout_rounds of rollouts (Brax-style) ───────────
+        # Brax collects batch_size*num_minibatches//num_envs rounds of data
+        # before each SGD pass. All rounds use the same collection policy
+        # (model weights are not updated during collection).
         def collect_step(carry, _):
             env_state, step_key = carry
             step_key, action_key = jax.random.split(step_key)
@@ -660,7 +664,6 @@ def train(
             raw_a = get_obs(env_state.obs, cfg.policy_obs_key)
             raw_c = get_obs(env_state.obs, cfg.value_obs_key)
 
-            # Normalise with current (pre-update) stats for action selection
             dist, _ = model(
                 normalize_obs(raw_a, actor_stats), normalize_obs(raw_c, critic_stats)
             )
@@ -685,21 +688,40 @@ def train(
                 truncation=truncation,
             )
 
-        (final_env_state, _), batch = jax.lax.scan(
-            collect_step, (env_state, rollout_key), None, length=cfg.num_steps
+        def collect_round(carry, _):
+            env_state, round_key = carry
+            round_key, step_key = jax.random.split(round_key)
+            (final_state, _), transitions = jax.lax.scan(
+                collect_step, (env_state, step_key), None, length=cfg.num_steps
+            )
+            return (final_state, round_key), transitions
+
+        (final_env_state, _), rounds = jax.lax.scan(
+            collect_round, (env_state, rollout_key), None, length=cfg.num_rollout_rounds
+        )
+        # rounds: Transition[num_rollout_rounds, num_steps, num_envs, ...]
+        # Flatten rounds into the env axis → [num_steps, num_rollout_rounds*num_envs, ...]
+        total_envs = cfg.num_envs * cfg.num_rollout_rounds
+        batch = jax.tree.map(
+            lambda x: x.transpose(1, 0, 2, *range(3, x.ndim)).reshape(
+                cfg.num_steps, total_envs, *x.shape[3:]
+            ),
+            rounds,
         )
 
-        # ── Update normaliser with full rollout (N*T samples) ────────────
+        # ── Update normaliser with all collected samples ──────────────────
         flat = lambda x: x.reshape(cfg.rollout_buffer_size, *x.shape[2:])
         new_actor_stats = running_statistics.update(actor_stats, flat(batch.actor_obs))
         new_critic_stats = running_statistics.update(
             critic_stats, flat(batch.critic_obs)
         )
 
-        # ── PPO epochs — GAE recomputed per minibatch (Brax-style) ───────
-        # Environments are shuffled (not flat samples) so each minibatch
-        # receives coherent T-step trajectories for correct GAE computation.
-        mb_size = cfg.num_envs // cfg.num_minibatches
+        # ── PPO epochs — Brax-style per-minibatch GAE recomputation ──────
+        # GAE is recomputed with the current model inside each minibatch step,
+        # matching Brax's compute_ppo_loss. This is stable because mb_size
+        # = total_envs // num_minibatches = num_rollout_rounds * num_envs // num_minibatches
+        # matches Brax's batch_size (e.g. 1024 for CheetahRun when num_rollout_rounds=16).
+        mb_size = total_envs // cfg.num_minibatches
         _, current_state = nnx.split((model, optimizer))
 
         def run_epoch(carry, _):
@@ -707,10 +729,10 @@ def train(
             epoch_key, perm_key, loss_key = jax.random.split(epoch_key, 3)
 
             # Permute along the environment axis, keeping time intact.
-            perm = jax.random.permutation(perm_key, cfg.num_envs)
+            perm = jax.random.permutation(perm_key, total_envs)
 
             def make_minibatches(x):
-                # [T, N, ...] → permute N → split into [num_mb, T, mb_size, ...]
+                # [T, N_total, ...] → permute N → [num_mb, T, mb_size, ...]
                 x_perm = x[:, perm]
                 x_split = x_perm.reshape(
                     cfg.num_steps, cfg.num_minibatches, mb_size, *x.shape[2:]
@@ -727,7 +749,6 @@ def train(
 
                 T, mb = cfg.num_steps, mb_size
 
-                # Normalise with updated stats
                 norm_a = normalize_obs(
                     traj.actor_obs.reshape(T * mb, -1), new_actor_stats
                 )
@@ -735,11 +756,9 @@ def train(
                     traj.critic_obs.reshape(T * mb, -1), new_critic_stats
                 )
 
-                # Recompute values with current model
+                # Recompute values and GAE with the current model (Brax compute_ppo_loss)
                 _, flat_values = m(norm_a, norm_c)
                 values = flat_values.reshape(T, mb)
-
-                # Bootstrap from next obs after the last step
                 norm_next_c = normalize_obs(traj.next_critic_obs[-1], new_critic_stats)
                 bootstrap_value = m.get_value(norm_next_c)
 

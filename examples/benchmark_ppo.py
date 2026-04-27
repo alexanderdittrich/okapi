@@ -51,14 +51,14 @@ ENVS = [
     "HumanoidRun",
     "CartpoleSwingup",
     # Locomotion
-    "BarkourJoystick",
-    "BerkeleyHumanoidJoystickFlatTerrain",
-    "Go1JoystickFlatTerrain",
-    "G1JoystickFlatTerrain",
+    # "BarkourJoystick",
+    # "BerkeleyHumanoidJoystickFlatTerrain",
+    # "Go1JoystickFlatTerrain",
+    # "G1JoystickFlatTerrain",
     # Manipulation
-    "AlohaHandOver",
-    "LeapCubeReorient",
-    "PandaPickCubeCartesian",
+    # "AlohaHandOver",
+    # "LeapCubeReorient",
+    # "PandaPickCubeCartesian",
 ]
 NUM_SEEDS = 8  # seeds used: 0, 1, ..., NUM_SEEDS-1
 
@@ -69,8 +69,8 @@ TIMESTEP_OVERRIDES = {
 }
 
 RUN_OKAPI_MJX = True
-RUN_OKAPI_WARP = True
-RUN_BRAX_MJX = True
+RUN_OKAPI_WARP = False
+RUN_BRAX_MJX = False
 RUN_BRAX_WARP = False
 
 
@@ -101,16 +101,11 @@ def brax_to_okapi(env_name, bc, seed, impl="jax"):
 
     num_steps = bc.unroll_length
     num_minibatches = bc.num_minibatches
-
-    # Brax collects (batch_size * num_minibatches // num_envs) rollout rounds per
-    # training step before running num_updates_per_batch SGD epochs. Okapi collects
-    # only 1 round per iteration, so scale down the epochs proportionally to keep
-    # the same number of gradient updates per environment sample.
-    brax_rollout_rounds = max(1, bc.batch_size * bc.num_minibatches // bc.num_envs)
-    update_epochs = max(1, bc.num_updates_per_batch // brax_rollout_rounds)
+    num_rollout_rounds = max(1, bc.batch_size * bc.num_minibatches // bc.num_envs)
 
     log_freq = 10
-    total_iters = bc.num_timesteps // (bc.num_envs * num_steps)
+    total_timesteps_per_iter = bc.num_envs * num_steps * num_rollout_rounds
+    total_iters = bc.num_timesteps // total_timesteps_per_iter
     eval_freq = max(log_freq, (total_iters // bc.num_evals // log_freq) * log_freq)
 
     return PPOConfig(
@@ -118,8 +113,9 @@ def brax_to_okapi(env_name, bc, seed, impl="jax"):
         num_envs=bc.num_envs,
         total_timesteps=bc.num_timesteps,
         num_steps=num_steps,
+        num_rollout_rounds=num_rollout_rounds,
         num_minibatches=num_minibatches,
-        update_epochs=update_epochs,
+        update_epochs=bc.num_updates_per_batch,
         learning_rate=bc.learning_rate,
         gamma=bc.discounting,
         gae_lambda=0.95,

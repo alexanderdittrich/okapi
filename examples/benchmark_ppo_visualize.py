@@ -16,7 +16,7 @@ OUT_PATH = Path("docs/benchmark_performance.png")
 ENVS = [
     "CheetahRun",
     "FishSwim",
-    # "HopperHop",
+    "HopperHop",
     "WalkerRun",
     "HumanoidRun",
     "CartpoleSwingup",
@@ -31,7 +31,7 @@ ENVS = [
 TITLES = {
     "CheetahRun": "Cheetah Run",
     "FishSwim": "Fish Swim",
-    # "HopperHop": "Hopper Hop",
+    "HopperHop": "Hopper Hop",
     "WalkerRun": "Walker Run",
     "HumanoidRun": "Humanoid Run",
     "BarkourJoystick": "Barkour \nJoystick",
