@@ -84,15 +84,13 @@ def sample_transitions(
     }
 
 
-def sample_sequences(
-    buffer: ReplayBuffer, key: jax.Array, batch_size: int, seq_len: int
-) -> PyTree:
+def sample_sequences(buffer: ReplayBuffer, key: jax.Array, batch_size: int, seq_len: int) -> PyTree:
     """Sample ``batch_size`` windows of ``seq_len`` consecutive rows; leaves ``(seq_len, batch, ...)``."""
     capacity, num_envs = _shape(buffer)
     filled = jnp.minimum(buffer.count, capacity)
     time_key, env_key = jax.random.split(key)
-    t0 = buffer.count - filled + jax.random.randint(
-        time_key, (batch_size,), 0, filled - seq_len + 1
+    t0 = (
+        buffer.count - filled + jax.random.randint(time_key, (batch_size,), 0, filled - seq_len + 1)
     )
     env = jax.random.randint(env_key, (batch_size,), 0, num_envs)
     rows = (t0[None, :] + jnp.arange(seq_len)[:, None]) % capacity

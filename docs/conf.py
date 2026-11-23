@@ -23,7 +23,15 @@ exclude_patterns = ["_build", "*.json"]
 
 # The heavy GPU stack is mocked so the docs build without CUDA wheels.
 autodoc_mock_imports = [
-    "jax", "flax", "optax", "orbax", "mujoco", "mujoco_playground", "brax", "warp", "wandb",
+    "jax",
+    "flax",
+    "optax",
+    "orbax",
+    "mujoco",
+    "mujoco_playground",
+    "brax",
+    "warp",
+    "wandb",
 ]
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"

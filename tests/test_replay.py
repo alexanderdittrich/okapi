@@ -10,16 +10,27 @@ from okapi.common import replay
 def make_buffer(rewards, terminal, last, capacity=None):
     """One environment; obs[t] = t so sampled indices can be read back."""
     T = len(rewards)
-    row = {"obs": {"state": jnp.zeros((1, 1))}, "action": jnp.zeros((1, 1)),
-           "reward": jnp.zeros(1), "terminal": jnp.zeros(1), "last": jnp.zeros(1),
-           "first": jnp.zeros(1)}
+    row = {
+        "obs": {"state": jnp.zeros((1, 1))},
+        "action": jnp.zeros((1, 1)),
+        "reward": jnp.zeros(1),
+        "terminal": jnp.zeros(1),
+        "last": jnp.zeros(1),
+        "first": jnp.zeros(1),
+    }
     buf = replay.init(row, capacity or T)
     for t in range(T):
-        buf = replay.add(buf, {
-            "obs": {"state": jnp.full((1, 1), float(t))}, "action": jnp.full((1, 1), float(t)),
-            "reward": jnp.array([rewards[t]], jnp.float32),
-            "terminal": jnp.array([terminal[t]], jnp.float32),
-            "last": jnp.array([last[t]], jnp.float32), "first": jnp.zeros(1)})
+        buf = replay.add(
+            buf,
+            {
+                "obs": {"state": jnp.full((1, 1), float(t))},
+                "action": jnp.full((1, 1), float(t)),
+                "reward": jnp.array([rewards[t]], jnp.float32),
+                "terminal": jnp.array([terminal[t]], jnp.float32),
+                "last": jnp.array([last[t]], jnp.float32),
+                "first": jnp.zeros(1),
+            },
+        )
     return buf
 
 

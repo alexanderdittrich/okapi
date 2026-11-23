@@ -35,8 +35,9 @@ def load_factory(spec: str):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("run_dir")
     ap.add_argument("--output", default="rollout.mp4", help=".mp4 or .gif")
     ap.add_argument("--step", type=int, default=None, help="Checkpoint step (default: latest)")
@@ -51,8 +52,9 @@ def main() -> None:
     args = ap.parse_args()
 
     meta = checkpoint.load_metadata(args.run_dir)
-    cfg = TrainConfig.from_dict({k: v for k, v in meta["config"].items()
-                                 if k in TrainConfig.__dataclass_fields__})
+    cfg = TrainConfig.from_dict(
+        {k: v for k, v in meta["config"].items() if k in TrainConfig.__dataclass_fields__}
+    )
     env = envs.load_env(cfg, load_factory(args.env) if args.env else None)
     policy = okapi.load_policy(args.run_dir, args.step)
     reset, step = jax.jit(env.reset), jax.jit(env.step)
@@ -60,8 +62,9 @@ def main() -> None:
 
     @jax.jit
     def act(params, carry, obs, first, key):
-        action, carry = policy.apply(params, carry, batch(obs), first[None], key,
-                                     not args.stochastic)
+        action, carry = policy.apply(
+            params, carry, batch(obs), first[None], key, not args.stochastic
+        )
         return action[0], carry
 
     key = jax.random.key(args.seed)
@@ -83,7 +86,7 @@ def main() -> None:
     kwargs = {"width": args.width, "height": args.height}
     if args.camera is not None:
         kwargs["camera"] = args.camera
-    frames = [np.asarray(f) for f in env.render(states[::args.render_every], **kwargs)]
+    frames = [np.asarray(f) for f in env.render(states[:: args.render_every], **kwargs)]
     fps = round(1.0 / env.dt / args.render_every)
     if args.output.endswith(".gif"):
         import imageio.v2 as imageio

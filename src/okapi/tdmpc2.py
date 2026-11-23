@@ -168,8 +168,14 @@ def simnorm(x: jax.Array, dim: int) -> jax.Array:
 # ── Networks ─────────────────────────────────────────────────────────────────
 
 
-def mlp(cfg: TDMPC2Config, in_size: int, hidden: list[int], out_size: int, rngs: nnx.Rngs,
-        out_scale: float | None = None) -> MLP:
+def mlp(
+    cfg: TDMPC2Config,
+    in_size: int,
+    hidden: list[int],
+    out_size: int,
+    rngs: nnx.Rngs,
+    out_scale: float | None = None,
+) -> MLP:
     """TD-MPC2 MLP: ``Linear → LayerNorm → Mish`` hidden layers and a linear output."""
     return MLP(in_size, hidden, out_size, "mish", layer_norm=True, out_scale=out_scale, rngs=rngs)
 
@@ -189,11 +195,19 @@ class QEnsemble(nnx.Module):
     """``num_q`` two-hot Q-functions; ``qs(z, a)`` returns logits ``(num_q, ..., num_bins)``."""
 
     def __init__(self, cfg: TDMPC2Config, action_size: int, *, rngs: nnx.Rngs):
-        self.qs = nnx.List([
-            mlp(cfg, cfg.latent_dim + action_size, [cfg.hidden] * 2, cfg.num_bins, rngs,
-                out_scale=0.0)
-            for _ in range(cfg.num_q)
-        ])
+        self.qs = nnx.List(
+            [
+                mlp(
+                    cfg,
+                    cfg.latent_dim + action_size,
+                    [cfg.hidden] * 2,
+                    cfg.num_bins,
+                    rngs,
+                    out_scale=0.0,
+                )
+                for _ in range(cfg.num_q)
+            ]
+        )
 
     def __call__(self, z: jax.Array, action: jax.Array) -> jax.Array:
         x = jnp.concatenate([z, action], -1)
@@ -231,7 +245,8 @@ class Actor(nnx.Module):
     def __call__(self, z: jax.Array) -> tuple[jax.Array, jax.Array]:
         mean, log_std = jnp.split(self.net(z), 2, axis=-1)
         log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
-            jnp.tanh(log_std) + 1.0)
+            jnp.tanh(log_std) + 1.0
+        )
         return mean, log_std
 
     def sample(self, z: jax.Array, key: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -257,8 +272,9 @@ class Networks(nnx.Module):
         self.target_qs = nnx.clone(self.model.qs)
         self.actor = Actor(cfg, action_size, rngs=rngs)
         tx = lambda lr: optax.chain(optax.clip_by_global_norm(cfg.grad_clip), optax.adam(lr))
-        self.encoder_opt = nnx.Optimizer(self.encoder, tx(cfg.learning_rate * cfg.encoder_lr_scale),
-                                         wrt=nnx.Param)
+        self.encoder_opt = nnx.Optimizer(
+            self.encoder, tx(cfg.learning_rate * cfg.encoder_lr_scale), wrt=nnx.Param
+        )
         self.model_opt = nnx.Optimizer(self.model, tx(cfg.learning_rate), wrt=nnx.Param)
         self.actor_opt = nnx.Optimizer(self.actor, tx(cfg.learning_rate), wrt=nnx.Param)
 
@@ -275,8 +291,14 @@ class Agent(nnx.Module):
 # ── Planning ─────────────────────────────────────────────────────────────────
 
 
-def estimate_value(agent: Agent, z: jax.Array, actions: jax.Array, bins: jax.Array,
-                   cfg: TDMPC2Config, key: jax.Array) -> jax.Array:
+def estimate_value(
+    agent: Agent,
+    z: jax.Array,
+    actions: jax.Array,
+    bins: jax.Array,
+    cfg: TDMPC2Config,
+    key: jax.Array,
+) -> jax.Array:
     """Discounted predicted rewards of ``actions (..., H, A)`` plus the Q-value at the horizon."""
     value, discount = jnp.zeros(z.shape[:-1]), 1.0
     for t in range(cfg.horizon):
@@ -291,8 +313,15 @@ def estimate_value(agent: Agent, z: jax.Array, actions: jax.Array, bins: jax.Arr
     return value + discount * q[pair].mean(0)
 
 
-def plan(agent: Agent, z: jax.Array, mean: jax.Array, bins: jax.Array, cfg: TDMPC2Config,
-         key: jax.Array, deterministic: bool) -> tuple[jax.Array, jax.Array]:
+def plan(
+    agent: Agent,
+    z: jax.Array,
+    mean: jax.Array,
+    bins: jax.Array,
+    cfg: TDMPC2Config,
+    key: jax.Array,
+    deterministic: bool,
+) -> tuple[jax.Array, jax.Array]:
     """MPPI from latents ``z (B, L)``, warm-started at ``mean (B, H, A)``.
 
     Returns the action ``(B, A)`` and the refined mean to warm-start the next step.
@@ -329,8 +358,16 @@ def plan(agent: Agent, z: jax.Array, mean: jax.Array, bins: jax.Array, cfg: TDMP
     return action, mean
 
 
-def act(agent: Agent, obs: jax.Array, mean: jax.Array, first: jax.Array, bins: jax.Array,
-        cfg: TDMPC2Config, key: jax.Array, deterministic: bool) -> tuple[jax.Array, jax.Array]:
+def act(
+    agent: Agent,
+    obs: jax.Array,
+    mean: jax.Array,
+    first: jax.Array,
+    bins: jax.Array,
+    cfg: TDMPC2Config,
+    key: jax.Array,
+    deterministic: bool,
+) -> tuple[jax.Array, jax.Array]:
     """Encode (normalized) ``obs`` and plan, or sample the policy prior if ``cfg.mpc`` is off."""
     z = agent.encoder(obs)
     if not cfg.mpc:
@@ -357,9 +394,16 @@ def make_policy_apply(graphdef: nnx.GraphDef, cfg: TDMPC2Config, policy_key: str
 # ── Losses ───────────────────────────────────────────────────────────────────
 
 
-def world_model_loss(encoder: Encoder, model: Model, target_qs: QEnsemble, actor: Actor,
-                     seq: dict[str, jax.Array], bins: jax.Array, cfg: TDMPC2Config,
-                     key: jax.Array):
+def world_model_loss(
+    encoder: Encoder,
+    model: Model,
+    target_qs: QEnsemble,
+    actor: Actor,
+    seq: dict[str, jax.Array],
+    bins: jax.Array,
+    cfg: TDMPC2Config,
+    key: jax.Array,
+):
     """Consistency, reward and TD losses on ``[H+1, B]`` sequences (normalized obs)."""
     H = cfg.horizon
     action, reward = seq["action"][:H], seq["reward"][1:]
@@ -386,15 +430,29 @@ def world_model_loss(encoder: Encoder, model: Model, target_qs: QEnsemble, actor
     reward_loss = (weight[:, None] * valid * reward_ce).mean(-1).sum() / H
     value_loss = (weight[None, :, None] * valid[None] * q_ce).mean(-1).sum() / (H * cfg.num_q)
     consistency = consistency / H
-    loss = (cfg.consistency_coef * consistency + cfg.reward_coef * reward_loss
-            + cfg.value_coef * value_loss)
-    metrics = {"loss/world_model": loss, "loss/consistency": consistency,
-               "loss/reward": reward_loss, "loss/value": value_loss}
+    loss = (
+        cfg.consistency_coef * consistency
+        + cfg.reward_coef * reward_loss
+        + cfg.value_coef * value_loss
+    )
+    metrics = {
+        "loss/world_model": loss,
+        "loss/consistency": consistency,
+        "loss/reward": reward_loss,
+        "loss/value": value_loss,
+    }
     return loss, (sg(jnp.stack(zs)), metrics)
 
 
-def actor_loss(actor: Actor, model: Model, zs: jax.Array, scale: jax.Array, bins: jax.Array,
-               cfg: TDMPC2Config, key: jax.Array):
+def actor_loss(
+    actor: Actor,
+    model: Model,
+    zs: jax.Array,
+    scale: jax.Array,
+    bins: jax.Array,
+    cfg: TDMPC2Config,
+    key: jax.Array,
+):
     """Maximize scale-normalized Q (mean of two random critics) plus entropy over the rollout."""
     action_key, q_key = jax.random.split(key)
     action, log_prob = actor.sample(zs, action_key)
@@ -406,26 +464,43 @@ def actor_loss(actor: Actor, model: Model, zs: jax.Array, scale: jax.Array, bins
     return (weight * per_step).mean(), (q_range, -log_prob.mean(), q.mean())
 
 
-def update(nets: Networks, seq: dict[str, jax.Array], scale: jax.Array, bins: jax.Array,
-           cfg: TDMPC2Config, key: jax.Array) -> tuple[jax.Array, dict[str, jax.Array]]:
+def update(
+    nets: Networks,
+    seq: dict[str, jax.Array],
+    scale: jax.Array,
+    bins: jax.Array,
+    cfg: TDMPC2Config,
+    key: jax.Array,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """One update of encoder, model and policy prior (in place); returns the new Q scale."""
     model_key, actor_key = jax.random.split(key)
     grad_fn = nnx.value_and_grad(world_model_loss, argnums=(0, 1), has_aux=True)
     (_, (zs, metrics)), (encoder_grads, model_grads) = grad_fn(
-        nets.encoder, nets.model, nets.target_qs, nets.actor, seq, bins, cfg, model_key)
+        nets.encoder, nets.model, nets.target_qs, nets.actor, seq, bins, cfg, model_key
+    )
     nets.encoder_opt.update(nets.encoder, encoder_grads)
     nets.model_opt.update(nets.model, model_grads)
 
     (a_loss, (q_range, entropy, q_mean)), grads = nnx.value_and_grad(actor_loss, has_aux=True)(
-        nets.actor, nets.model, zs, scale, bins, cfg, actor_key)
+        nets.actor, nets.model, zs, scale, bins, cfg, actor_key
+    )
     nets.actor_opt.update(nets.actor, grads)
 
-    target = jax.tree.map(lambda t, s: (1.0 - cfg.tau) * t + cfg.tau * s,
-                          nnx.state(nets.target_qs), nnx.state(nets.model.qs))
+    target = jax.tree.map(
+        lambda t, s: (1.0 - cfg.tau) * t + cfg.tau * s,
+        nnx.state(nets.target_qs),
+        nnx.state(nets.model.qs),
+    )
     nnx.update(nets.target_qs, target)
     scale = (1.0 - cfg.scale_rate) * scale + cfg.scale_rate * q_range
-    metrics.update({"loss/actor": a_loss, "train/entropy": entropy, "train/q_mean": q_mean,
-                    "train/q_scale": scale})
+    metrics.update(
+        {
+            "loss/actor": a_loss,
+            "train/entropy": entropy,
+            "train/q_mean": q_mean,
+            "train/q_scale": scale,
+        }
+    )
     return scale, metrics
 
 
@@ -470,11 +545,18 @@ def train(
     scale = jnp.ones(())
     if resume_from is not None:
         _, restored = checkpoint.load(
-            resume_from, {"nets": nets_state, "obs_stats": obs_stats, "scale": scale})
+            resume_from, {"nets": nets_state, "obs_stats": obs_stats, "scale": scale}
+        )
         nets_state, obs_stats, scale = restored["nets"], restored["obs_stats"], restored["scale"]
 
-    row = {"obs": obs, "action": jnp.zeros((n, A)), "reward": jnp.zeros(n),
-           "terminal": jnp.zeros(n), "last": jnp.zeros(n), "first": jnp.zeros(n)}
+    row = {
+        "obs": obs,
+        "action": jnp.zeros((n, A)),
+        "reward": jnp.zeros(n),
+        "terminal": jnp.zeros(n),
+        "last": jnp.zeros(n),
+        "first": jnp.zeros(n),
+    }
     buffer = replay.init(row, cfg.buffer_size // n)
 
     def collect(state: TDMPC2State, nets: Networks, random: bool) -> TDMPC2State:
@@ -488,16 +570,29 @@ def train(
         else:
             x = envs.normalize_obs(obs, state.obs_stats)[pk]
             agent = Agent(nets.encoder, nets.model, nets.actor)
-            action, plan_mean = act(agent, x, state.plan_mean, state.first, bins, cfg, act_key,
-                                    deterministic=False)
-        buffer = replay.add(state.buffer, {
-            "obs": obs, "action": action, "reward": env_state.reward,
-            "terminal": envs.termination(env_state), "last": env_state.done,
-            "first": state.first})
+            action, plan_mean = act(
+                agent, x, state.plan_mean, state.first, bins, cfg, act_key, deterministic=False
+            )
+        buffer = replay.add(
+            state.buffer,
+            {
+                "obs": obs,
+                "action": action,
+                "reward": env_state.reward,
+                "terminal": envs.termination(env_state),
+                "last": env_state.done,
+                "first": state.first,
+            },
+        )
         next_state = envs.step_or_reset(env, env_state, action, reset_key)
-        return state._replace(obs_stats=envs.update_obs_stats(state.obs_stats, obs),
-                              buffer=buffer, env_state=next_state, plan_mean=plan_mean,
-                              first=env_state.done, key=key)
+        return state._replace(
+            obs_stats=envs.update_obs_stats(state.obs_stats, obs),
+            buffer=buffer,
+            env_state=next_state,
+            plan_mean=plan_mean,
+            first=env_state.done,
+            key=key,
+        )
 
     def learn(state: TDMPC2State, nets: Networks):
         key, scale, metrics = state.key, state.scale, {}
@@ -519,8 +614,9 @@ def train(
 
         @jax.jit(donate_argnums=0)  # update the replay buffer in place
         def run(buffer: replay.ReplayBuffer, state: TDMPC2State):
-            state, metrics = jax.lax.scan(iteration, state._replace(buffer=buffer), None,
-                                          num_iterations)
+            state, metrics = jax.lax.scan(
+                iteration, state._replace(buffer=buffer), None, num_iterations
+            )
             return state.buffer, state._replace(buffer=None), jax.tree.map(lambda x: x[-1], metrics)
 
         def train_fn(state: TDMPC2State):
@@ -529,25 +625,35 @@ def train(
 
         return train_fn
 
-    state = TDMPC2State(nets_state, obs_stats, scale, buffer, s.env_state,
-                        jnp.zeros((n, H, A)), jnp.ones(n), key)
+    state = TDMPC2State(
+        nets_state, obs_stats, scale, buffer, s.env_state, jnp.zeros((n, H, A)), jnp.ones(n), key
+    )
     warmup_iterations = max(math.ceil(cfg.learning_starts / n), H + 2)
     state, _ = make_train_fn(warmup_iterations, random=True)(state)
     iterations = max(1, min(cfg.total_timesteps // (cfg.num_logs * n), 1000))
 
     def policy_params(state: TDMPC2State) -> dict[str, Any]:
         nets = nnx.merge(graphdef, state.nets)
-        return {"agent": nnx.state(Agent(nets.encoder, nets.model, nets.actor)),
-                "obs_stats": state.obs_stats}
+        return {
+            "agent": nnx.state(Agent(nets.encoder, nets.model, nets.actor)),
+            "obs_stats": state.obs_stats,
+        }
 
     init_carry = lambda batch_size: jnp.zeros((batch_size, H, A))
     apply = make_policy_apply(agent_graphdef, cfg, pk)
     evaluate = envs.make_evaluator(cfg, s.eval_env, apply, init_carry)
     state, _ = train_loop(
-        cfg, s.logger, state, make_train_fn(iterations, random=False), iterations * n,
-        evaluate, policy_params,
+        cfg,
+        s.logger,
+        state,
+        make_train_fn(iterations, random=False),
+        iterations * n,
+        evaluate,
+        policy_params,
         lambda st: {"nets": st.nets, "obs_stats": st.obs_stats, "scale": st.scale},
-        jax.random.key(cfg.seed + 1), warmup_iterations * n)
+        jax.random.key(cfg.seed + 1),
+        warmup_iterations * n,
+    )
     s.logger.close()
     return Policy(NAME, policy_params(state), apply, init_carry)
 
@@ -567,8 +673,12 @@ def load_policy(run_dir: str | Path, step: int | None = None) -> Policy:
     nets = nnx.merge(graphdef, restored["nets"])
     agent_graphdef, agent_state = nnx.split(Agent(nets.encoder, nets.model, nets.actor))
     params = {"agent": agent_state, "obs_stats": restored["obs_stats"]}
-    return Policy(NAME, params, make_policy_apply(agent_graphdef, cfg, pk),
-                  lambda batch_size: jnp.zeros((batch_size, cfg.horizon, A)))
+    return Policy(
+        NAME,
+        params,
+        make_policy_apply(agent_graphdef, cfg, pk),
+        lambda batch_size: jnp.zeros((batch_size, cfg.horizon, A)),
+    )
 
 
 Config = TDMPC2Config

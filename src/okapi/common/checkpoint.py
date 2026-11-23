@@ -41,9 +41,7 @@ def load(run_dir: str | Path, target: Any, step: int | None = None) -> tuple[int
     step = mgr.latest_step() if step is None else step
     if step is None:
         raise FileNotFoundError(f"No checkpoints in {run_dir}")
-    out = mgr.restore(
-        step, args=ocp.args.StandardRestore({"state": target, "step": jnp.array(0)})
-    )
+    out = mgr.restore(step, args=ocp.args.StandardRestore({"state": target, "step": jnp.array(0)}))
     return int(out["step"]), out["state"]
 
 

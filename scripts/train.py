@@ -1,8 +1,8 @@
 """Train any okapi algorithm on a MuJoCo Playground environment.
 
-    uv run scripts/train.py algo=sac env_id=CheetahRun
-    uv run scripts/train.py algo=ppo env_id=Go1JoystickFlatTerrain value_obs_key=privileged_state
-    uv run scripts/train.py algo=simbav2 env_id=CheetahRun seed=1 use_wandb=true checkpoint=true
+uv run scripts/train.py algo=sac env_id=CheetahRun
+uv run scripts/train.py algo=ppo env_id=Go1JoystickFlatTerrain value_obs_key=privileged_state
+uv run scripts/train.py algo=simbav2 env_id=CheetahRun seed=1 use_wandb=true checkpoint=true
 """
 
 import warnings

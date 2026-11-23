@@ -104,15 +104,15 @@ class HyperLinear(nnx.Module):
 class SimbaV2Net(nnx.Module):
     """Hyperspherical embedding, ``num_blocks`` LERP residual blocks and a linear output."""
 
-    def __init__(self, in_size: int, width: int, num_blocks: int, out_size: int,
-                 *, rngs: nnx.Rngs):
+    def __init__(self, in_size: int, width: int, num_blocks: int, out_size: int, *, rngs: nnx.Rngs):
         self.embed = HyperLinear(in_size + 1, width, rngs=rngs)
         self.embed_scale = nnx.Param(jnp.ones(width))
         self.up = nnx.List([HyperLinear(width, 4 * width, rngs=rngs) for _ in range(num_blocks)])
         self.up_scale = nnx.List([nnx.Param(jnp.ones(4 * width)) for _ in range(num_blocks)])
         self.down = nnx.List([HyperLinear(4 * width, width, rngs=rngs) for _ in range(num_blocks)])
-        self.alpha = nnx.List([nnx.Param(jnp.full(width, 1.0 / (num_blocks + 1)))
-                               for _ in range(num_blocks)])
+        self.alpha = nnx.List(
+            [nnx.Param(jnp.full(width, 1.0 / (num_blocks + 1))) for _ in range(num_blocks)]
+        )
         self.head = HyperLinear(width, width, rngs=rngs)
         self.head_scale = nnx.Param(jnp.ones(width))
         self.out = nnx.Linear(width, out_size, rngs=rngs)
@@ -134,8 +134,9 @@ def project_weights(module: nnx.Module) -> None:
             m.project()
 
 
-def sample_tanh_normal(mean: jax.Array, log_std: jax.Array,
-                       key: jax.Array) -> tuple[jax.Array, jax.Array]:
+def sample_tanh_normal(
+    mean: jax.Array, log_std: jax.Array, key: jax.Array
+) -> tuple[jax.Array, jax.Array]:
     """Sample ``tanh(N(mean, std))`` and its log-density (summed over action dims)."""
     std = jnp.exp(log_std)
     u = mean + std * jax.random.normal(key, mean.shape)
@@ -148,8 +149,9 @@ class Actor(nnx.Module):
     """Tanh-Gaussian policy on a SimbaV2 network."""
 
     def __init__(self, obs_size: int, action_size: int, cfg: SimbaV2Config, *, rngs: nnx.Rngs):
-        self.net = SimbaV2Net(obs_size, cfg.actor_width, cfg.actor_blocks, 2 * action_size,
-                              rngs=rngs)
+        self.net = SimbaV2Net(
+            obs_size, cfg.actor_width, cfg.actor_blocks, 2 * action_size, rngs=rngs
+        )
 
     def __call__(self, obs: jax.Array) -> tuple[jax.Array, jax.Array]:
         mean, log_std = jnp.split(self.net(obs), 2, axis=-1)
@@ -171,11 +173,18 @@ class Critic(nnx.Module):
     """
 
     def __init__(self, obs_size: int, action_size: int, cfg: SimbaV2Config, *, rngs: nnx.Rngs):
-        self.qs = nnx.List([
-            SimbaV2Net(obs_size + action_size, cfg.critic_width, cfg.critic_blocks,
-                       cfg.num_atoms, rngs=rngs)
-            for _ in range(2)
-        ])
+        self.qs = nnx.List(
+            [
+                SimbaV2Net(
+                    obs_size + action_size,
+                    cfg.critic_width,
+                    cfg.critic_blocks,
+                    cfg.num_atoms,
+                    rngs=rngs,
+                )
+                for _ in range(2)
+            ]
+        )
         self.action_scale = math.sqrt(obs_size / action_size)
 
     def __call__(self, obs: jax.Array, action: jax.Array) -> jax.Array:
@@ -194,8 +203,14 @@ class Temperature(nnx.Module):
 class Networks(nnx.Module):
     """All learned modules and their optimizers, split / merged as one state."""
 
-    def __init__(self, cfg: SimbaV2Config, policy_obs_size: int, value_obs_size: int,
-                 action_size: int, key: jax.Array):
+    def __init__(
+        self,
+        cfg: SimbaV2Config,
+        policy_obs_size: int,
+        value_obs_size: int,
+        action_size: int,
+        key: jax.Array,
+    ):
         rngs = nnx.Rngs(key)
         self.actor = Actor(policy_obs_size, action_size, cfg, rngs=rngs)
         self.critic = Critic(value_obs_size, action_size, cfg, rngs=rngs)
@@ -210,8 +225,9 @@ class Networks(nnx.Module):
 
         self.actor_opt = nnx.Optimizer(self.actor, tx(), wrt=nnx.Param)
         self.critic_opt = nnx.Optimizer(self.critic, tx(), wrt=nnx.Param)
-        self.temperature_opt = nnx.Optimizer(self.temperature, optax.adam(cfg.learning_rate),
-                                             wrt=nnx.Param)
+        self.temperature_opt = nnx.Optimizer(
+            self.temperature, optax.adam(cfg.learning_rate), wrt=nnx.Param
+        )
 
 
 def make_policy_apply(graphdef: nnx.GraphDef, policy_key: str):
@@ -238,12 +254,22 @@ def project_categorical(atoms: jax.Array, probs: jax.Array, support: jax.Array) 
     w_lo = jnp.where(hi == lo, 1.0, hi - b)
     w_hi = b - lo
     one_hot = lambda i: jax.nn.one_hot(i.astype(jnp.int32), n)
-    return (probs[..., None] * (w_lo[..., None] * one_hot(lo) + w_hi[..., None] * one_hot(hi))).sum(-2)
+    return (probs[..., None] * (w_lo[..., None] * one_hot(lo) + w_hi[..., None] * one_hot(hi))).sum(
+        -2
+    )
 
 
-def critic_loss(critic: Critic, actor: Actor, target_critic: Critic, alpha: jax.Array,
-                batch: dict[str, Any], support: jax.Array, pk: str, vk: str,
-                key: jax.Array) -> tuple[jax.Array, dict[str, jax.Array]]:
+def critic_loss(
+    critic: Critic,
+    actor: Actor,
+    target_critic: Critic,
+    alpha: jax.Array,
+    batch: dict[str, Any],
+    support: jax.Array,
+    pk: str,
+    vk: str,
+    key: jax.Array,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Cross-entropy towards the projected soft n-step target distribution."""
     next_action, next_log_prob = actor.sample(batch["next_obs"][pk], key)
     next_logits = target_critic(batch["next_obs"][vk], next_action)  # (2, B, N)
@@ -251,7 +277,8 @@ def critic_loss(critic: Critic, actor: Actor, target_critic: Critic, alpha: jax.
     lower = jnp.argmin(next_q, 0)  # clipped double-Q: distribution with the lower mean
     next_probs = jax.nn.softmax(jnp.take_along_axis(next_logits, lower[None, :, None], 0)[0])
     atoms = batch["reward"][:, None] + batch["discount"][:, None] * (
-        support[None] - alpha * next_log_prob[:, None])
+        support[None] - alpha * next_log_prob[:, None]
+    )
     target = jax.lax.stop_gradient(project_categorical(atoms, next_probs, support))
     logits = critic(batch["obs"][vk], batch["action"])
     loss = -(target[None] * jax.nn.log_softmax(logits)).sum(-1).mean(-1).sum()
@@ -259,45 +286,72 @@ def critic_loss(critic: Critic, actor: Actor, target_critic: Critic, alpha: jax.
     return loss, {"loss/critic": loss, "train/q_mean": q.mean()}
 
 
-def actor_loss(actor: Actor, critic: Critic, alpha: jax.Array, batch: dict[str, Any],
-               support: jax.Array, pk: str, vk: str,
-               key: jax.Array) -> tuple[jax.Array, jax.Array]:
+def actor_loss(
+    actor: Actor,
+    critic: Critic,
+    alpha: jax.Array,
+    batch: dict[str, Any],
+    support: jax.Array,
+    pk: str,
+    vk: str,
+    key: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
     """Maximize the soft value under the lower of both critics' means."""
     action, log_prob = actor.sample(batch["obs"][pk], key)
     q = (jax.nn.softmax(critic(batch["obs"][vk], action)) * support).sum(-1).min(0)
     return (alpha * log_prob - q).mean(), log_prob
 
 
-def temperature_loss(temperature: Temperature, log_prob: jax.Array,
-                     target_entropy: float) -> jax.Array:
+def temperature_loss(
+    temperature: Temperature, log_prob: jax.Array, target_entropy: float
+) -> jax.Array:
     return -(temperature.log_alpha[...] * jax.lax.stop_gradient(log_prob + target_entropy)).mean()
 
 
-def update(nets: Networks, batch: dict[str, Any], cfg: SimbaV2Config, support: jax.Array,
-           pk: str, vk: str, target_entropy: float, key: jax.Array) -> dict[str, jax.Array]:
+def update(
+    nets: Networks,
+    batch: dict[str, Any],
+    cfg: SimbaV2Config,
+    support: jax.Array,
+    pk: str,
+    vk: str,
+    target_entropy: float,
+    key: jax.Array,
+) -> dict[str, jax.Array]:
     """One gradient step of critic, actor and temperature, weight projection, target update."""
     critic_key, actor_key = jax.random.split(key)
     alpha = nets.temperature()
     (_, metrics), grads = nnx.value_and_grad(critic_loss, has_aux=True)(
-        nets.critic, nets.actor, nets.target_critic, alpha, batch, support, pk, vk, critic_key)
+        nets.critic, nets.actor, nets.target_critic, alpha, batch, support, pk, vk, critic_key
+    )
     nets.critic_opt.update(nets.critic, grads)
     project_weights(nets.critic)
 
     (loss, log_prob), grads = nnx.value_and_grad(actor_loss, has_aux=True)(
-        nets.actor, nets.critic, alpha, batch, support, pk, vk, actor_key)
+        nets.actor, nets.critic, alpha, batch, support, pk, vk, actor_key
+    )
     nets.actor_opt.update(nets.actor, grads)
     project_weights(nets.actor)
 
-    alpha_loss, grads = nnx.value_and_grad(temperature_loss)(nets.temperature, log_prob,
-                                                            target_entropy)
+    alpha_loss, grads = nnx.value_and_grad(temperature_loss)(
+        nets.temperature, log_prob, target_entropy
+    )
     nets.temperature_opt.update(nets.temperature, grads)
 
-    target = jax.tree.map(lambda t, s: (1.0 - cfg.tau) * t + cfg.tau * s,
-                          nnx.state(nets.target_critic), nnx.state(nets.critic))
+    target = jax.tree.map(
+        lambda t, s: (1.0 - cfg.tau) * t + cfg.tau * s,
+        nnx.state(nets.target_critic),
+        nnx.state(nets.critic),
+    )
     nnx.update(nets.target_critic, target)
     project_weights(nets.target_critic)
-    return {**metrics, "loss/actor": loss, "loss/alpha": alpha_loss,
-            "train/alpha": nets.temperature(), "train/entropy": -log_prob.mean()}
+    return {
+        **metrics,
+        "loss/actor": loss,
+        "loss/alpha": alpha_loss,
+        "train/alpha": nets.temperature(),
+        "train/entropy": -log_prob.mean(),
+    }
 
 
 # ── Training ─────────────────────────────────────────────────────────────────
@@ -332,16 +386,22 @@ def train(
     obs_stats = envs.init_obs_stats(obs)
     return_stats = running_statistics.init_state(())
     support = jnp.linspace(-cfg.v_max, cfg.v_max, cfg.num_atoms)
-    target_entropy = (-0.5 * s.action_size if cfg.target_entropy is None
-                      else cfg.target_entropy)
+    target_entropy = -0.5 * s.action_size if cfg.target_entropy is None else cfg.target_entropy
     if resume_from is not None:
-        _, restored = checkpoint.load(resume_from, {"nets": nets_state, "obs_stats": obs_stats,
-                                                    "return_stats": return_stats})
+        _, restored = checkpoint.load(
+            resume_from, {"nets": nets_state, "obs_stats": obs_stats, "return_stats": return_stats}
+        )
         nets_state, obs_stats = restored["nets"], restored["obs_stats"]
         return_stats = restored["return_stats"]
 
-    row = {"obs": obs, "action": jnp.zeros((n, s.action_size)), "reward": jnp.zeros(n),
-           "terminal": jnp.zeros(n), "last": jnp.zeros(n), "first": jnp.zeros(n)}
+    row = {
+        "obs": obs,
+        "action": jnp.zeros((n, s.action_size)),
+        "reward": jnp.zeros(n),
+        "terminal": jnp.zeros(n),
+        "last": jnp.zeros(n),
+        "first": jnp.zeros(n),
+    }
     buffer = replay.init(row, cfg.buffer_size // n)
 
     def collect(state: SimbaV2State, nets: Networks, random: bool) -> SimbaV2State:
@@ -355,17 +415,28 @@ def train(
             x = envs.normalize_obs(obs, state.obs_stats)[pk]
             action, _ = nets.actor.sample(x, action_key)
         reward = env_state.reward * cfg.reward_scaling
-        buffer = replay.add(state.buffer, {
-            "obs": obs, "action": action, "reward": reward,
-            "terminal": envs.termination(env_state), "last": env_state.done,
-            "first": state.first})
+        buffer = replay.add(
+            state.buffer,
+            {
+                "obs": obs,
+                "action": action,
+                "reward": reward,
+                "terminal": envs.termination(env_state),
+                "last": env_state.done,
+                "first": state.first,
+            },
+        )
         ret = state.discounted_return * cfg.gamma * (1.0 - state.first) + reward
         next_state = envs.step_or_reset(env, env_state, action, reset_key)
         return state._replace(
             obs_stats=envs.update_obs_stats(state.obs_stats, obs),
             return_stats=running_statistics.update(state.return_stats, ret),
-            discounted_return=ret, buffer=buffer, env_state=next_state,
-            first=env_state.done, key=key)
+            discounted_return=ret,
+            buffer=buffer,
+            env_state=next_state,
+            first=env_state.done,
+            key=key,
+        )
 
     def learn(state: SimbaV2State, nets: Networks) -> tuple[SimbaV2State, dict[str, jax.Array]]:
         scale = state.return_stats.std if cfg.normalize_rewards else 1.0
@@ -373,8 +444,9 @@ def train(
         key = state.key
         for _ in range(cfg.updates_per_step):
             key, sample_key, update_key = jax.random.split(key, 3)
-            batch = replay.sample_transitions(state.buffer, sample_key, cfg.batch_size,
-                                              cfg.n_step, cfg.gamma)
+            batch = replay.sample_transitions(
+                state.buffer, sample_key, cfg.batch_size, cfg.n_step, cfg.gamma
+            )
             batch["reward"] = batch["reward"] / scale
             batch["obs"] = envs.normalize_obs(batch["obs"], state.obs_stats)
             batch["next_obs"] = envs.normalize_obs(batch["next_obs"], state.obs_stats)
@@ -393,8 +465,9 @@ def train(
 
         @jax.jit(donate_argnums=0)  # update the replay buffer in place
         def run(buffer: replay.ReplayBuffer, state: SimbaV2State):
-            state, metrics = jax.lax.scan(iteration, state._replace(buffer=buffer), None,
-                                          num_iterations)
+            state, metrics = jax.lax.scan(
+                iteration, state._replace(buffer=buffer), None, num_iterations
+            )
             return state.buffer, state._replace(buffer=None), jax.tree.map(lambda x: x[-1], metrics)
 
         def train_fn(state: SimbaV2State) -> tuple[SimbaV2State, dict[str, jax.Array]]:
@@ -403,23 +476,33 @@ def train(
 
         return train_fn
 
-    state = SimbaV2State(nets_state, obs_stats, return_stats, jnp.zeros(n), buffer,
-                         s.env_state, jnp.ones(n), key)
+    state = SimbaV2State(
+        nets_state, obs_stats, return_stats, jnp.zeros(n), buffer, s.env_state, jnp.ones(n), key
+    )
     warmup_iterations = max(math.ceil(cfg.learning_starts / n), cfg.n_step + 2)
     state, _ = make_train_fn(warmup_iterations, random=True)(state)
     iterations = max(1, min(cfg.total_timesteps // (cfg.num_logs * n), 1000))
 
     def policy_params(state: SimbaV2State) -> dict[str, Any]:
-        return {"actor": nnx.state(nnx.merge(graphdef, state.nets).actor),
-                "obs_stats": state.obs_stats}
+        return {
+            "actor": nnx.state(nnx.merge(graphdef, state.nets).actor),
+            "obs_stats": state.obs_stats,
+        }
 
     apply = make_policy_apply(actor_graphdef, pk)
     evaluate = envs.make_evaluator(cfg, s.eval_env, apply, lambda n: ())
     state, _ = train_loop(
-        cfg, s.logger, state, make_train_fn(iterations, random=False), iterations * n,
-        evaluate, policy_params,
+        cfg,
+        s.logger,
+        state,
+        make_train_fn(iterations, random=False),
+        iterations * n,
+        evaluate,
+        policy_params,
         lambda st: {"nets": st.nets, "obs_stats": st.obs_stats, "return_stats": st.return_stats},
-        jax.random.key(cfg.seed + 1), warmup_iterations * n)
+        jax.random.key(cfg.seed + 1),
+        warmup_iterations * n,
+    )
     s.logger.close()
     return Policy(NAME, policy_params(state), apply)
 
@@ -434,8 +517,11 @@ def load_policy(run_dir: str | Path, step: int | None = None) -> Policy:
     nets = Networks(cfg, shapes[pk][-1], shapes[vk][-1], spec["action_size"], jax.random.key(0))
     graphdef, nets_state = nnx.split(nets)
     obs_stats = {k: running_statistics.init_state(v[-1:]) for k, v in shapes.items()}
-    target = {"nets": nets_state, "obs_stats": obs_stats,
-              "return_stats": running_statistics.init_state(())}
+    target = {
+        "nets": nets_state,
+        "obs_stats": obs_stats,
+        "return_stats": running_statistics.init_state(()),
+    }
     _, restored = checkpoint.load(run_dir, target, step)
     actor_graphdef, actor_state = nnx.split(nnx.merge(graphdef, restored["nets"]).actor)
     params = {"actor": actor_state, "obs_stats": restored["obs_stats"]}

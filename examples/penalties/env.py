@@ -35,16 +35,50 @@ STRIKER_Q, KEEPER_Q, BALL_Q = slice(0, 28), slice(28, 56), slice(56, 63)
 STRIKER_V, KEEPER_V, BALL_V = slice(0, 27), slice(27, 54), slice(54, 60)
 NU = 21
 
-_MOTORS = [("abdomen_y", 40), ("abdomen_z", 40), ("abdomen_x", 40), ("hip_x_right", 40),
-           ("hip_z_right", 40), ("hip_y_right", 120), ("knee_right", 80), ("ankle_x_right", 20),
-           ("ankle_y_right", 20), ("hip_x_left", 40), ("hip_z_left", 40), ("hip_y_left", 120),
-           ("knee_left", 80), ("ankle_x_left", 20), ("ankle_y_left", 20), ("shoulder1_right", 20),
-           ("shoulder2_right", 20), ("elbow_right", 40), ("shoulder1_left", 20),
-           ("shoulder2_left", 20), ("elbow_left", 40)]
-_BODY_GEOMS = ["torso", "waist_upper", "head", "waist_lower", "butt", "thigh_right", "shin_right",
-               "foot1_right", "foot2_right", "thigh_left", "shin_left", "foot1_left", "foot2_left",
-               "upper_arm_right", "lower_arm_right", "hand_right", "upper_arm_left",
-               "lower_arm_left", "hand_left"]
+_MOTORS = [
+    ("abdomen_y", 40),
+    ("abdomen_z", 40),
+    ("abdomen_x", 40),
+    ("hip_x_right", 40),
+    ("hip_z_right", 40),
+    ("hip_y_right", 120),
+    ("knee_right", 80),
+    ("ankle_x_right", 20),
+    ("ankle_y_right", 20),
+    ("hip_x_left", 40),
+    ("hip_z_left", 40),
+    ("hip_y_left", 120),
+    ("knee_left", 80),
+    ("ankle_x_left", 20),
+    ("ankle_y_left", 20),
+    ("shoulder1_right", 20),
+    ("shoulder2_right", 20),
+    ("elbow_right", 40),
+    ("shoulder1_left", 20),
+    ("shoulder2_left", 20),
+    ("elbow_left", 40),
+]
+_BODY_GEOMS = [
+    "torso",
+    "waist_upper",
+    "head",
+    "waist_lower",
+    "butt",
+    "thigh_right",
+    "shin_right",
+    "foot1_right",
+    "foot2_right",
+    "thigh_left",
+    "shin_left",
+    "foot1_left",
+    "foot2_left",
+    "upper_arm_right",
+    "lower_arm_right",
+    "hand_right",
+    "upper_arm_left",
+    "lower_arm_left",
+    "hand_left",
+]
 
 
 # ── Scene ────────────────────────────────────────────────────────────────────
@@ -131,11 +165,15 @@ def _humanoid(p: str) -> str:
 def _contacts() -> str:
     pairs = []
     for p in ("striker", "keeper"):
-        pairs += [f'<exclude body1="waist_lower_{p}" body2="thigh_right_{p}"/>',
-                  f'<exclude body1="waist_lower_{p}" body2="thigh_left_{p}"/>']
+        pairs += [
+            f'<exclude body1="waist_lower_{p}" body2="thigh_right_{p}"/>',
+            f'<exclude body1="waist_lower_{p}" body2="thigh_left_{p}"/>',
+        ]
         for side in ("left", "right"):  # feet on the floor, both feet and shins on the ball
-            pairs += [f'<pair geom1="foot1_{side}_{p}" geom2="floor"/>',
-                      f'<pair geom1="foot2_{side}_{p}" geom2="floor"/>']
+            pairs += [
+                f'<pair geom1="foot1_{side}_{p}" geom2="floor"/>',
+                f'<pair geom1="foot2_{side}_{p}" geom2="floor"/>',
+            ]
     for g in ["foot1_left", "foot2_left", "shin_left", "foot1_right", "foot2_right", "shin_right"]:
         pairs.append(f'<pair geom1="{g}_striker" geom2="ball"/>')
     for g in _BODY_GEOMS:  # the keeper blocks with any body part; both can land on the floor
@@ -144,14 +182,20 @@ def _contacts() -> str:
             pairs.append(f'<pair geom1="{g}_keeper" geom2="floor"/>')
     for g in ["torso", "head", "butt", "thigh_right", "thigh_left", "hand_right", "hand_left"]:
         pairs.append(f'<pair geom1="{g}_striker" geom2="floor"/>')
-    pairs += ['<pair geom1="post_left" geom2="ball"/>', '<pair geom1="post_right" geom2="ball"/>',
-              '<pair geom1="crossbar" geom2="ball"/>']
+    pairs += [
+        '<pair geom1="post_left" geom2="ball"/>',
+        '<pair geom1="post_right" geom2="ball"/>',
+        '<pair geom1="crossbar" geom2="ball"/>',
+    ]
     return "\n    ".join(pairs)
 
 
 def make_xml() -> str:
-    motors = "\n    ".join(f'<motor name="{n}_{p}" gear="{g}" joint="{n}_{p}"/>'
-                           for p in ("striker", "keeper") for n, g in _MOTORS)
+    motors = "\n    ".join(
+        f'<motor name="{n}_{p}" gear="{g}" joint="{n}_{p}"/>'
+        for p in ("striker", "keeper")
+        for n, g in _MOTORS
+    )
     return f"""<mujoco model="penalties">
   <option timestep="0.005" iterations="6" ls_iterations="6" solver="CG">
     <flag eulerdamp="disable"/>
@@ -261,9 +305,13 @@ class PenaltyKick(mjx_env.MjxEnv):
         striker_policy: For ``role="keeper"``: ``striker_policy(striker_obs) -> action``.
     """
 
-    def __init__(self, role: str = "striker", striker_policy: Policy | None = None,
-                 config: config_dict.ConfigDict | None = None,
-                 config_overrides: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        role: str = "striker",
+        striker_policy: Policy | None = None,
+        config: config_dict.ConfigDict | None = None,
+        config_overrides: dict[str, Any] | None = None,
+    ):
         super().__init__(config or default_config(), config_overrides)
         if role == "keeper" and striker_policy is None:
             raise ValueError("role='keeper' needs a striker_policy")
@@ -275,8 +323,14 @@ class PenaltyKick(mjx_env.MjxEnv):
         body = lambda n: self._mj_model.body(n).id
         self._torso = {p: body(f"torso_{p}") for p in ("striker", "keeper")}
         self._feet = jnp.array([body("foot_left_striker"), body("foot_right_striker")])
-        self._hands = jnp.array([body("hand_left_keeper"), body("hand_right_keeper"),
-                                 body("head_keeper"), body("torso_keeper")])
+        self._hands = jnp.array(
+            [
+                body("hand_left_keeper"),
+                body("hand_right_keeper"),
+                body("head_keeper"),
+                body("torso_keeper"),
+            ]
+        )
 
     # ── Reset / step ─────────────────────────────────────────────────────────
 
@@ -285,8 +339,11 @@ class PenaltyKick(mjx_env.MjxEnv):
         qpos = jnp.array(self._mj_model.qpos0)
         joints = jnp.r_[7:28, 35:56]
         qpos = qpos.at[joints].add(jax.random.uniform(q_key, (42,), minval=-0.02, maxval=0.02))
-        qvel = jnp.zeros(self._mj_model.nv).at[:54].set(
-            jax.random.uniform(v_key, (54,), minval=-0.02, maxval=0.02))
+        qvel = (
+            jnp.zeros(self._mj_model.nv)
+            .at[:54]
+            .set(jax.random.uniform(v_key, (54,), minval=-0.02, maxval=0.02))
+        )
         data = mjx_env.make_data(self._mj_model, qpos=qpos, qvel=qvel, impl=self._config.impl)
         data = mjx.forward(self._mjx_model, data)
         lo = jnp.array([-GOAL_WIDTH / 2 + 0.35, 0.25])
@@ -299,8 +356,9 @@ class PenaltyKick(mjx_env.MjxEnv):
             "kicked": jnp.zeros(()),  # ball has been struck
         }
         metrics = {k: jnp.zeros(()) for k in ("goal", "save", "upright", "shot", "intercept")}
-        return mjx_env.State(data, self._obs(data, info), jnp.zeros(()), jnp.zeros(()),
-                             metrics, info)
+        return mjx_env.State(
+            data, self._obs(data, info), jnp.zeros(()), jnp.zeros(()), metrics, info
+        )
 
     def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
         info = dict(state.info)
@@ -316,8 +374,9 @@ class PenaltyKick(mjx_env.MjxEnv):
         ball0, ball = state.data.qpos[BALL_Q][:3], data.qpos[BALL_Q][:3]
         vel0, vel = state.data.qvel[BALL_V][:3], data.qvel[BALL_V][:3]
         crossed = (ball0[0] < GOAL_X) & (ball[0] >= GOAL_X) & (info["shot_over"] == 0)
-        in_frame = ((jnp.abs(ball[1]) < GOAL_WIDTH / 2 - BALL_RADIUS)
-                    & (ball[2] < GOAL_HEIGHT - BALL_RADIUS))
+        in_frame = (jnp.abs(ball[1]) < GOAL_WIDTH / 2 - BALL_RADIUS) & (
+            ball[2] < GOAL_HEIGHT - BALL_RADIUS
+        )
         goal = (crossed & in_frame).astype(jnp.float32)
         info["kicked"] = jnp.maximum(info["kicked"], (vel[0] > 2.0).astype(jnp.float32))
         # a save: a struck ball near the keeper changes velocity abruptly without a goal
@@ -332,14 +391,16 @@ class PenaltyKick(mjx_env.MjxEnv):
         info["shot_over"] = jnp.maximum(info["shot_over"], jnp.maximum(goal, save))
         info["shot_over"] = jnp.maximum(info["shot_over"], crossed.astype(jnp.float32))
         info["step"] = info["step"] + 1
-        metrics = {k: jnp.where(unstable, 0.0, v)
-                   for k, v in {**terms, "goal": goal, "save": save}.items()}
+        metrics = {
+            k: jnp.where(unstable, 0.0, v) for k, v in {**terms, "goal": goal, "save": save}.items()
+        }
         # a diverged simulation ends the episode; the auto-reset discards its state
         obs = jax.tree.map(lambda x: jnp.where(unstable, 0.0, x), self._obs(data, info))
         reward = jnp.where(unstable, 0.0, reward)
         done = jnp.maximum(done, unstable.astype(jnp.float32))
-        return state.replace(data=data, obs=obs, reward=reward, done=done, metrics=metrics,
-                             info=info)
+        return state.replace(
+            data=data, obs=obs, reward=reward, done=done, metrics=metrics, info=info
+        )
 
     def _physics_step(self, data: mjx.Data, ctrl: jax.Array) -> mjx.Data:
         """``n_substeps`` physics steps, clamping velocities after each one for stability."""
@@ -371,9 +432,15 @@ class PenaltyKick(mjx_env.MjxEnv):
         miss = jnp.linalg.norm(ball[1:] - info["target"])
         accuracy = goal * jnp.exp(-jnp.square(miss) / 0.25)
         fallen = data.xpos[self._torso["striker"]][2] < 0.75
-        reward = (rc.upright * upright + rc.approach * approach + rc.shot * shot
-                  + rc.goal * goal + rc.accuracy * accuracy - rc.fall * fallen
-                  - rc.ctrl * jnp.sum(jnp.square(action)))
+        reward = (
+            rc.upright * upright
+            + rc.approach * approach
+            + rc.shot * shot
+            + rc.goal * goal
+            + rc.accuracy * accuracy
+            - rc.fall * fallen
+            - rc.ctrl * jnp.sum(jnp.square(action))
+        )
         terms = {"upright": upright, "shot": shot, "intercept": jnp.zeros(())}
         return reward, fallen.astype(jnp.float32), terms
 
@@ -384,13 +451,23 @@ class PenaltyKick(mjx_env.MjxEnv):
         # predicted point where the ball crosses the keeper's plane (ballistic flight)
         plane = GOAL_X - 0.3
         t = jnp.clip((plane - ball[0]) / jnp.maximum(vel[0], 0.5), 0.0, 2.0)
-        cross = jnp.array([plane, ball[1] + vel[1] * t,
-                           jnp.maximum(ball[2] + vel[2] * t - 0.5 * GRAVITY * t**2, BALL_RADIUS)])
+        cross = jnp.array(
+            [
+                plane,
+                ball[1] + vel[1] * t,
+                jnp.maximum(ball[2] + vel[2] * t - 0.5 * GRAVITY * t**2, BALL_RADIUS),
+            ]
+        )
         reach = jnp.min(jnp.linalg.norm(data.xpos[self._hands] - cross, axis=-1))
         incoming = (info["kicked"] > 0) & (info["shot_over"] == 0) & (vel[0] > 0.5)
         intercept = jnp.exp(-jnp.square(reach) / 0.3) * incoming
-        reward = (rc.upright * upright + rc.intercept * intercept + rc.save * save
-                  - rc.goal * goal - rc.ctrl * jnp.sum(jnp.square(action)))
+        reward = (
+            rc.upright * upright
+            + rc.intercept * intercept
+            + rc.save * save
+            - rc.goal * goal
+            - rc.ctrl * jnp.sum(jnp.square(action))
+        )
         terms = {"upright": upright, "shot": jnp.zeros(()), "intercept": intercept}
         return reward, jnp.zeros(()), terms
 
@@ -399,24 +476,34 @@ class PenaltyKick(mjx_env.MjxEnv):
     def _player_obs(self, data: mjx.Data, player: str, q: slice, v: slice) -> jax.Array:
         torso = data.xpos[self._torso[player]]
         ball, ball_vel = data.qpos[BALL_Q][:3], data.qvel[BALL_V][:3]
-        return jnp.concatenate([
-            data.qpos[q][2:],  # torso height, orientation, joint angles (26)
-            data.qvel[v],  # (27)
-            ball - torso, ball_vel,  # (6)
-        ])
+        return jnp.concatenate(
+            [
+                data.qpos[q][2:],  # torso height, orientation, joint angles (26)
+                data.qvel[v],  # (27)
+                ball - torso,
+                ball_vel,  # (6)
+            ]
+        )
 
     def _obs(self, data: mjx.Data, info: dict[str, Any]) -> dict[str, jax.Array]:
         time = info["step"].astype(jnp.float32)[None] / self._config.episode_length
-        striker = jnp.concatenate([
-            self._player_obs(data, "striker", STRIKER_Q, STRIKER_V),
-            (data.xpos[self._feet] - data.qpos[BALL_Q][:3]).ravel(),  # feet relative to ball
-            info["target"], time,
-        ])  # 68
-        keeper = jnp.concatenate([
-            self._player_obs(data, "keeper", KEEPER_Q, KEEPER_V),
-            (data.xpos[self._feet] - data.xpos[self._torso["keeper"]]).ravel(),  # striker's feet
-            time,
-        ])  # 66
+        striker = jnp.concatenate(
+            [
+                self._player_obs(data, "striker", STRIKER_Q, STRIKER_V),
+                (data.xpos[self._feet] - data.qpos[BALL_Q][:3]).ravel(),  # feet relative to ball
+                info["target"],
+                time,
+            ]
+        )  # 68
+        keeper = jnp.concatenate(
+            [
+                self._player_obs(data, "keeper", KEEPER_Q, KEEPER_V),
+                (
+                    data.xpos[self._feet] - data.xpos[self._torso["keeper"]]
+                ).ravel(),  # striker's feet
+                time,
+            ]
+        )  # 66
         obs = {"striker": striker, "keeper": keeper}
         obs["state"] = obs[self.role]
         return obs

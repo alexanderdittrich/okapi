@@ -91,8 +91,11 @@ class NormalTanhDistribution:
         return jnp.tanh(raw_action)
 
     def log_prob(self, raw_action: jax.Array) -> jax.Array:
-        gaussian = (-0.5 * jnp.square((raw_action - self.loc) / self.scale)
-                    - 0.5 * jnp.log(2.0 * jnp.pi) - jnp.log(self.scale))
+        gaussian = (
+            -0.5 * jnp.square((raw_action - self.loc) / self.scale)
+            - 0.5 * jnp.log(2.0 * jnp.pi)
+            - jnp.log(self.scale)
+        )
         return jnp.sum(gaussian - self._tanh_log_jacobian(raw_action), axis=-1)
 
     def entropy(self, key: jax.Array) -> jax.Array:
@@ -112,10 +115,19 @@ def reset_hidden(h: jax.Array, first: jax.Array) -> jax.Array:
 class RecurrentMLP(nnx.Module):
     """``Linear → activation → GRU → MLP``: an MLP with a GRU after its first layer."""
 
-    def __init__(self, in_size: int, hidden_sizes: list[int], gru_size: int, out_size: int,
-                 activation: str, *, rngs: nnx.Rngs):
-        self.encoder = nnx.Linear(in_size, hidden_sizes[0],
-                                  kernel_init=nnx.initializers.lecun_uniform(), rngs=rngs)
+    def __init__(
+        self,
+        in_size: int,
+        hidden_sizes: list[int],
+        gru_size: int,
+        out_size: int,
+        activation: str,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.encoder = nnx.Linear(
+            in_size, hidden_sizes[0], kernel_init=nnx.initializers.lecun_uniform(), rngs=rngs
+        )
         self.gru = nnx.GRUCell(hidden_sizes[0], gru_size, rngs=rngs)
         self.head = MLP(gru_size, hidden_sizes[1:], out_size, activation, rngs=rngs)
         self.activation = ACTIVATIONS[activation]
@@ -132,12 +144,26 @@ class Hidden(NamedTuple):
 
 
 class RecurrentActorCritic(nnx.Module):
-    def __init__(self, policy_obs_size: int, value_obs_size: int, action_size: int,
-                 cfg: PPOGRUConfig, *, rngs: nnx.Rngs):
-        self.policy_net = RecurrentMLP(policy_obs_size, cfg.actor_hidden_sizes, cfg.gru_size,
-                                       2 * action_size, cfg.activation, rngs=rngs)
-        self.value_net = RecurrentMLP(value_obs_size, cfg.critic_hidden_sizes, cfg.gru_size, 1,
-                                      cfg.activation, rngs=rngs)
+    def __init__(
+        self,
+        policy_obs_size: int,
+        value_obs_size: int,
+        action_size: int,
+        cfg: PPOGRUConfig,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.policy_net = RecurrentMLP(
+            policy_obs_size,
+            cfg.actor_hidden_sizes,
+            cfg.gru_size,
+            2 * action_size,
+            cfg.activation,
+            rngs=rngs,
+        )
+        self.value_net = RecurrentMLP(
+            value_obs_size, cfg.critic_hidden_sizes, cfg.gru_size, 1, cfg.activation, rngs=rngs
+        )
 
     def policy(self, h: jax.Array, obs: jax.Array, first: jax.Array):
         h, out = self.policy_net(h, obs, first)
@@ -148,10 +174,17 @@ class RecurrentActorCritic(nnx.Module):
         return h, out.squeeze(-1)
 
 
-def make_model(cfg: PPOGRUConfig, obs_shapes: dict[str, tuple[int, ...]], policy_key: str,
-               value_key: str, action_size: int, key: jax.Array):
-    model = RecurrentActorCritic(obs_shapes[policy_key][-1], obs_shapes[value_key][-1],
-                                 action_size, cfg, rngs=nnx.Rngs(key))
+def make_model(
+    cfg: PPOGRUConfig,
+    obs_shapes: dict[str, tuple[int, ...]],
+    policy_key: str,
+    value_key: str,
+    action_size: int,
+    key: jax.Array,
+):
+    model = RecurrentActorCritic(
+        obs_shapes[policy_key][-1], obs_shapes[value_key][-1], action_size, cfg, rngs=nnx.Rngs(key)
+    )
     tx = optax.adam(cfg.learning_rate, eps=1e-5)
     if cfg.max_grad_norm is not None:
         tx = optax.chain(optax.clip_by_global_norm(cfg.max_grad_norm), tx)
@@ -186,8 +219,13 @@ class Transition(NamedTuple):
 
 
 def compute_gae(
-    rewards: jax.Array, values: jax.Array, dones: jax.Array, truncations: jax.Array,
-    bootstrap_value: jax.Array, gamma: float, gae_lambda: float,
+    rewards: jax.Array,
+    values: jax.Array,
+    dones: jax.Array,
+    truncations: jax.Array,
+    bootstrap_value: jax.Array,
+    gamma: float,
+    gae_lambda: float,
 ) -> tuple[jax.Array, jax.Array]:
     """Brax GAE (see :func:`okapi.ppo.compute_gae`)."""
     trunc_mask = 1.0 - truncations
@@ -200,18 +238,27 @@ def compute_gae(
         acc = delta + gamma * (1.0 - term) * tmask * gae_lambda * acc
         return acc, acc
 
-    _, vs_minus_v = jax.lax.scan(step, jnp.zeros_like(bootstrap_value),
-                                 (deltas, termination, trunc_mask), reverse=True)
+    _, vs_minus_v = jax.lax.scan(
+        step, jnp.zeros_like(bootstrap_value), (deltas, termination, trunc_mask), reverse=True
+    )
     vs = vs_minus_v + values
     vs_next = jnp.concatenate([vs[1:], bootstrap_value[None]], axis=0)
     advantages = (rewards + gamma * (1.0 - termination) * vs_next - values) * trunc_mask
     return jax.lax.stop_gradient(vs), jax.lax.stop_gradient(advantages)
 
 
-def ppo_loss(model: RecurrentActorCritic, traj: Transition, h0: Hidden,
-             bootstrap_obs: jax.Array, bootstrap_first: jax.Array, obs_stats: envs.ObsStats,
-             policy_key: str, value_key: str, cfg: PPOGRUConfig,
-             key: jax.Array) -> tuple[jax.Array, dict[str, jax.Array]]:
+def ppo_loss(
+    model: RecurrentActorCritic,
+    traj: Transition,
+    h0: Hidden,
+    bootstrap_obs: jax.Array,
+    bootstrap_first: jax.Array,
+    obs_stats: envs.ObsStats,
+    policy_key: str,
+    value_key: str,
+    cfg: PPOGRUConfig,
+    key: jax.Array,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """PPO loss on ``[T, B]`` sequences replayed from the hidden states ``h0``."""
     T, B = traj.reward.shape
     obs = envs.normalize_obs(traj.obs, obs_stats)
@@ -222,13 +269,14 @@ def ppo_loss(model: RecurrentActorCritic, traj: Transition, h0: Hidden,
         hc, value = model.value(h.critic, v_obs, first)
         return Hidden(ha, hc), (dist_params, value)
 
-    h, (dist_params, values) = jax.lax.scan(
-        step, h0, (obs[policy_key], obs[value_key], traj.first))
-    boot_obs = envs.normalize_obs({value_key: bootstrap_obs},
-                                  {value_key: obs_stats[value_key]})[value_key]
+    h, (dist_params, values) = jax.lax.scan(step, h0, (obs[policy_key], obs[value_key], traj.first))
+    boot_obs = envs.normalize_obs({value_key: bootstrap_obs}, {value_key: obs_stats[value_key]})[
+        value_key
+    ]
     _, bootstrap_value = model.value(h.critic, boot_obs, bootstrap_first)
-    targets, advantages = compute_gae(traj.reward, values, traj.done, traj.truncation,
-                                      bootstrap_value, cfg.gamma, cfg.gae_lambda)
+    targets, advantages = compute_gae(
+        traj.reward, values, traj.done, traj.truncation, bootstrap_value, cfg.gamma, cfg.gae_lambda
+    )
     if cfg.norm_adv:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
@@ -281,7 +329,8 @@ def train(
     start_step = 0
     if resume_from is not None:
         start_step, restored = checkpoint.load(
-            resume_from, {"model_opt": model_opt, "obs_stats": obs_stats})
+            resume_from, {"model_opt": model_opt, "obs_stats": obs_stats}
+        )
         model_opt, obs_stats = restored["model_opt"], restored["obs_stats"]
 
     def zeros_hidden(n: int) -> Hidden:
@@ -300,13 +349,20 @@ def train(
             raw_action = dist.sample_raw(action_key)
             next_state = env.step(env_state, dist.postprocess(raw_action))
             truncation = next_state.info.get("truncation", jnp.zeros_like(next_state.done))
-            transition = Transition(obs, first, raw_action, dist.log_prob(raw_action),
-                                    next_state.reward * cfg.reward_scaling, next_state.done,
-                                    truncation)
+            transition = Transition(
+                obs,
+                first,
+                raw_action,
+                dist.log_prob(raw_action),
+                next_state.reward * cfg.reward_scaling,
+                next_state.done,
+                truncation,
+            )
             return (next_state, Hidden(ha, hc), next_state.done, key), transition
 
         (env_state, hidden, first, _), traj = jax.lax.scan(
-            step, (env_state, hidden, first, key), None, cfg.num_steps)
+            step, (env_state, hidden, first, key), None, cfg.num_steps
+        )
         return env_state, hidden, first, traj
 
     @jax.jit
@@ -331,17 +387,21 @@ def train(
         def collect_round(carry, round_key):
             env_state, hidden, first = carry
             h0 = hidden
-            env_state, hidden, first, traj = collect(model, state.obs_stats, env_state,
-                                                     hidden, first, round_key)
+            env_state, hidden, first, traj = collect(
+                model, state.obs_stats, env_state, hidden, first, round_key
+            )
             bootstrap = envs.select_obs(env_state.obs, (vk,))[vk]
             return (env_state, hidden, first), (traj, h0, bootstrap, first)
 
         (env_state, hidden, first), (rounds, h0, bootstrap, boot_first) = jax.lax.scan(
-            collect_round, (state.env_state, state.hidden, state.first),
-            jax.random.split(rollout_key, cfg.num_rollout_rounds))
+            collect_round,
+            (state.env_state, state.hidden, state.first),
+            jax.random.split(rollout_key, cfg.num_rollout_rounds),
+        )
         flat = lambda x: x.reshape(total_envs, *x.shape[2:])  # [R, N, ...] → [R*N, ...]
-        batch = jax.tree.map(lambda x: jnp.swapaxes(x, 0, 1).reshape(
-            cfg.num_steps, total_envs, *x.shape[3:]), rounds)
+        batch = jax.tree.map(
+            lambda x: jnp.swapaxes(x, 0, 1).reshape(cfg.num_steps, total_envs, *x.shape[3:]), rounds
+        )
         h0, bootstrap, boot_first = jax.tree.map(flat, (h0, bootstrap, boot_first))
         obs_stats = envs.update_obs_stats(state.obs_stats, batch.obs)
 
@@ -349,24 +409,37 @@ def train(
 
         def epoch(model_opt, epoch_key):
             perm_key, loss_key = jax.random.split(epoch_key)
-            perm = jax.random.permutation(perm_key, total_envs).reshape(cfg.num_minibatches, mb_size)
+            perm = jax.random.permutation(perm_key, total_envs).reshape(
+                cfg.num_minibatches, mb_size
+            )
 
             def minibatch(model_opt, x):
                 idx, mb_key = x
                 model, optimizer = nnx.merge(graphdef, model_opt)
                 traj = jax.tree.map(lambda v: v[:, idx], batch)
                 mb_h0 = jax.tree.map(lambda v: v[idx], h0)
-                (_, metrics), grads = grad_fn(model, traj, mb_h0, bootstrap[idx],
-                                              boot_first[idx], obs_stats, pk, vk, cfg, mb_key)
+                (_, metrics), grads = grad_fn(
+                    model,
+                    traj,
+                    mb_h0,
+                    bootstrap[idx],
+                    boot_first[idx],
+                    obs_stats,
+                    pk,
+                    vk,
+                    cfg,
+                    mb_key,
+                )
                 optimizer.update(model, grads)
                 return nnx.split((model, optimizer))[1], metrics
 
-            return jax.lax.scan(minibatch, model_opt,
-                                (perm, jax.random.split(loss_key, cfg.num_minibatches)))
+            return jax.lax.scan(
+                minibatch, model_opt, (perm, jax.random.split(loss_key, cfg.num_minibatches))
+            )
 
         model_opt, metrics = jax.lax.scan(
-            epoch, nnx.split((model, optimizer))[1],
-            jax.random.split(update_key, cfg.update_epochs))
+            epoch, nnx.split((model, optimizer))[1], jax.random.split(update_key, cfg.update_epochs)
+        )
         metrics = jax.tree.map(jnp.mean, metrics)
         metrics["train/reward_per_step"] = batch.reward.mean() / cfg.reward_scaling
         return PPOGRUState(model_opt, obs_stats, env_state, hidden, first, key), metrics
@@ -378,12 +451,21 @@ def train(
     init_carry = lambda n: jnp.zeros((n, cfg.gru_size))
     apply = make_policy_apply(model_graphdef, pk)
     evaluate = envs.make_evaluator(cfg, s.eval_env, apply, init_carry)
-    state = PPOGRUState(model_opt, obs_stats, s.env_state, zeros_hidden(cfg.num_envs),
-                        jnp.ones(cfg.num_envs), key)
+    state = PPOGRUState(
+        model_opt, obs_stats, s.env_state, zeros_hidden(cfg.num_envs), jnp.ones(cfg.num_envs), key
+    )
     state, _ = train_loop(
-        cfg, s.logger, state, train_iteration, cfg.steps_per_iteration, evaluate,
-        policy_params, lambda st: {"model_opt": st.model_opt, "obs_stats": st.obs_stats},
-        jax.random.key(cfg.seed + 1), start_step)
+        cfg,
+        s.logger,
+        state,
+        train_iteration,
+        cfg.steps_per_iteration,
+        evaluate,
+        policy_params,
+        lambda st: {"model_opt": st.model_opt, "obs_stats": st.obs_stats},
+        jax.random.key(cfg.seed + 1),
+        start_step,
+    )
     s.logger.close()
     return Policy(NAME, policy_params(state), apply, init_carry)
 
@@ -402,8 +484,9 @@ def load_policy(run_dir: str | Path, step: int | None = None) -> Policy:
     model, _ = nnx.merge(graphdef, restored["model_opt"])
     model_graphdef, model_state = nnx.split(model)
     params = {"model": model_state, "obs_stats": restored["obs_stats"]}
-    return Policy(NAME, params, make_policy_apply(model_graphdef, pk),
-                  lambda n: jnp.zeros((n, cfg.gru_size)))
+    return Policy(
+        NAME, params, make_policy_apply(model_graphdef, pk), lambda n: jnp.zeros((n, cfg.gru_size))
+    )
 
 
 Config = PPOGRUConfig

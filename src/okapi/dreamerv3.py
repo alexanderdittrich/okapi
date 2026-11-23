@@ -148,20 +148,34 @@ class Latent(NamedTuple):
 # ── Networks ─────────────────────────────────────────────────────────────────
 
 
-def mlp(cfg: DreamerV3Config, in_size: int, out_size: int, rngs: nnx.Rngs,
-        layers: int | None = None, out_scale: float | None = None) -> MLP:
+def mlp(
+    cfg: DreamerV3Config,
+    in_size: int,
+    out_size: int,
+    rngs: nnx.Rngs,
+    layers: int | None = None,
+    out_scale: float | None = None,
+) -> MLP:
     """DreamerV3 MLP: ``Dense → LayerNorm → SiLU`` hidden layers and a linear output."""
     layers = cfg.num_layers if layers is None else layers
-    return MLP(in_size, [cfg.hidden] * layers, out_size, "silu", layer_norm=True,
-               out_scale=out_scale, rngs=rngs)
+    return MLP(
+        in_size,
+        [cfg.hidden] * layers,
+        out_size,
+        "silu",
+        layer_norm=True,
+        out_scale=out_scale,
+        rngs=rngs,
+    )
 
 
 class LayerNormGRU(nnx.Module):
     """GRU cell with LayerNorm on the gate pre-activations (DreamerV3)."""
 
     def __init__(self, in_size: int, size: int, *, rngs: nnx.Rngs):
-        self.linear = nnx.Linear(in_size + size, 3 * size,
-                                 kernel_init=nnx.initializers.glorot_uniform(), rngs=rngs)
+        self.linear = nnx.Linear(
+            in_size + size, 3 * size, kernel_init=nnx.initializers.glorot_uniform(), rngs=rngs
+        )
         self.norm = nnx.LayerNorm(3 * size, rngs=rngs)
 
     def __call__(self, x: jax.Array, h: jax.Array) -> jax.Array:
@@ -215,8 +229,9 @@ class WorldModel(nnx.Module):
         h = self._deter(s, action)
         return Latent(h, self._draw(self._dist(self.prior(h)), key))
 
-    def obs_step(self, s: Latent, prev_action: jax.Array, embed: jax.Array, first: jax.Array,
-                 key: jax.Array) -> tuple[Latent, jax.Array, jax.Array]:
+    def obs_step(
+        self, s: Latent, prev_action: jax.Array, embed: jax.Array, first: jax.Array, key: jax.Array
+    ) -> tuple[Latent, jax.Array, jax.Array]:
         """Posterior transition (reset where ``first``). Returns ``(latent, post, prior)``."""
         keep = (1.0 - first)[..., None]
         s, prev_action = Latent(s.h * keep, s.z * keep), prev_action * keep
@@ -233,8 +248,9 @@ class Actor(nnx.Module):
     """Normal policy on latent features: ``tanh`` mean and std in ``[min_std, max_std]``."""
 
     def __init__(self, cfg: DreamerV3Config, action_size: int, *, rngs: nnx.Rngs):
-        self.net = mlp(cfg, cfg.deter + cfg.stoch * cfg.classes, 2 * action_size, rngs,
-                       out_scale=0.01)
+        self.net = mlp(
+            cfg, cfg.deter + cfg.stoch * cfg.classes, 2 * action_size, rngs, out_scale=0.01
+        )
         self.min_std, self.max_std = cfg.min_std, cfg.max_std
 
     def __call__(self, feat: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -267,11 +283,15 @@ class Networks(nnx.Module):
         self.critic = Critic(cfg, rngs=rngs)
         self.slow_critic = nnx.clone(self.critic)
         tx = lambda lr, clip: optax.chain(optax.clip_by_global_norm(clip), optax.adam(lr, eps=1e-8))
-        self.model_opt = nnx.Optimizer(self.world_model, tx(cfg.model_lr, cfg.model_grad_clip),
-                                       wrt=nnx.Param)
-        self.actor_opt = nnx.Optimizer(self.actor, tx(cfg.actor_lr, cfg.ac_grad_clip), wrt=nnx.Param)
-        self.critic_opt = nnx.Optimizer(self.critic, tx(cfg.critic_lr, cfg.ac_grad_clip),
-                                        wrt=nnx.Param)
+        self.model_opt = nnx.Optimizer(
+            self.world_model, tx(cfg.model_lr, cfg.model_grad_clip), wrt=nnx.Param
+        )
+        self.actor_opt = nnx.Optimizer(
+            self.actor, tx(cfg.actor_lr, cfg.ac_grad_clip), wrt=nnx.Param
+        )
+        self.critic_opt = nnx.Optimizer(
+            self.critic, tx(cfg.critic_lr, cfg.ac_grad_clip), wrt=nnx.Param
+        )
 
 
 class Agent(nnx.Module):
@@ -282,8 +302,15 @@ class Agent(nnx.Module):
         self.actor = actor
 
 
-def agent_step(agent: Agent, latent: Latent, prev_action: jax.Array, obs: jax.Array,
-               first: jax.Array, key: jax.Array, deterministic: bool) -> tuple[jax.Array, Latent]:
+def agent_step(
+    agent: Agent,
+    latent: Latent,
+    prev_action: jax.Array,
+    obs: jax.Array,
+    first: jax.Array,
+    key: jax.Array,
+    deterministic: bool,
+) -> tuple[jax.Array, Latent]:
     """Filter the observation into the latent state and pick an action."""
     latent_key, action_key = jax.random.split(key)
     wm = agent.world_model
@@ -314,8 +341,9 @@ def kl_categorical(p: jax.Array, q: jax.Array) -> jax.Array:
     return (p * (jnp.log(p) - jnp.log(q))).sum((-2, -1))
 
 
-def world_model_loss(wm: WorldModel, seq: dict[str, jax.Array], bins: jax.Array,
-                     cfg: DreamerV3Config, key: jax.Array):
+def world_model_loss(
+    wm: WorldModel, seq: dict[str, jax.Array], bins: jax.Array, cfg: DreamerV3Config, key: jax.Array
+):
     """Reconstruction, reward, continue and balanced KL losses on ``[L, B]`` sequences."""
     obs = seq["obs"]
     embed = wm.encode(obs)
@@ -329,7 +357,8 @@ def world_model_loss(wm: WorldModel, seq: dict[str, jax.Array], bins: jax.Array,
         return s, (s, post, prior)
 
     _, (latents, post, prior) = jax.lax.scan(
-        step, wm.initial((B,)), (embed, prev_action, first, jax.random.split(key, L)))
+        step, wm.initial((B,)), (embed, prev_action, first, jax.random.split(key, L))
+    )
     feat = wm.feat(latents)
     recon = 0.5 * jnp.square(wm.decoder(feat) - symlog(obs)).sum(-1)
     reward = -(twohot(symlog(seq["reward"]), bins) * jax.nn.log_softmax(wm.reward(feat))).sum(-1)
@@ -337,14 +366,19 @@ def world_model_loss(wm: WorldModel, seq: dict[str, jax.Array], bins: jax.Array,
     dyn = jnp.maximum(cfg.free_nats, kl_categorical(sg(post), prior))
     rep = jnp.maximum(cfg.free_nats, kl_categorical(post, sg(prior)))
     loss = (recon + reward + cont + cfg.dyn_scale * dyn + cfg.rep_scale * rep).mean()
-    metrics = {"loss/world_model": loss, "loss/reconstruction": recon.mean(),
-               "loss/reward": reward.mean(), "loss/continue": cont.mean(),
-               "train/kl": kl_categorical(post, prior).mean()}
+    metrics = {
+        "loss/world_model": loss,
+        "loss/reconstruction": recon.mean(),
+        "loss/reward": reward.mean(),
+        "loss/continue": cont.mean(),
+        "train/kl": kl_categorical(post, prior).mean(),
+    }
     return loss, (latents, metrics)
 
 
-def lambda_returns(reward: jax.Array, cont: jax.Array, value: jax.Array, gamma: float,
-                   lam: float) -> jax.Array:
+def lambda_returns(
+    reward: jax.Array, cont: jax.Array, value: jax.Array, gamma: float, lam: float
+) -> jax.Array:
     """``reward, cont``: ``(H, N)`` on arriving at states 1..H; ``value``: ``(H+1, N)``."""
 
     def step(nxt, x):
@@ -356,8 +390,17 @@ def lambda_returns(reward: jax.Array, cont: jax.Array, value: jax.Array, gamma: 
     return rets
 
 
-def actor_loss(actor: Actor, wm: WorldModel, critic: Critic, start: Latent, start_cont: jax.Array,
-               return_scale: jax.Array, bins: jax.Array, cfg: DreamerV3Config, key: jax.Array):
+def actor_loss(
+    actor: Actor,
+    wm: WorldModel,
+    critic: Critic,
+    start: Latent,
+    start_cont: jax.Array,
+    return_scale: jax.Array,
+    bins: jax.Array,
+    cfg: DreamerV3Config,
+    key: jax.Array,
+):
     """Imagine ``horizon`` steps and maximize normalized lambda-returns plus entropy."""
 
     def step(s, k):
@@ -380,8 +423,15 @@ def actor_loss(actor: Actor, wm: WorldModel, critic: Critic, start: Latent, star
     return loss, (sg(feats), sg(rets), weight, hi - lo, entropy.mean())
 
 
-def critic_loss(critic: Critic, slow_critic: Critic, feats: jax.Array, rets: jax.Array,
-                weight: jax.Array, bins: jax.Array, cfg: DreamerV3Config) -> jax.Array:
+def critic_loss(
+    critic: Critic,
+    slow_critic: Critic,
+    feats: jax.Array,
+    rets: jax.Array,
+    weight: jax.Array,
+    bins: jax.Array,
+    cfg: DreamerV3Config,
+) -> jax.Array:
     """Two-hot cross-entropy towards lambda-returns, regularized towards the slow critic."""
     log_probs = jax.nn.log_softmax(critic(feats[:-1]))
     target = twohot(symlog(rets), bins)
@@ -390,32 +440,59 @@ def critic_loss(critic: Critic, slow_critic: Critic, feats: jax.Array, rets: jax
     return (weight * loss).mean()
 
 
-def update(nets: Networks, seq: dict[str, jax.Array], return_scale: jax.Array,
-           bins: jax.Array, cfg: DreamerV3Config,
-           key: jax.Array) -> tuple[jax.Array, dict[str, jax.Array]]:
+def update(
+    nets: Networks,
+    seq: dict[str, jax.Array],
+    return_scale: jax.Array,
+    bins: jax.Array,
+    cfg: DreamerV3Config,
+    key: jax.Array,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Update world model, actor and critic (in place); returns the new return scale."""
     model_key, imagine_key = jax.random.split(key)
     (_, (latents, metrics)), grads = nnx.value_and_grad(world_model_loss, has_aux=True)(
-        nets.world_model, seq, bins, cfg, model_key)
+        nets.world_model, seq, bins, cfg, model_key
+    )
     nets.model_opt.update(nets.world_model, grads)
 
     start = jax.tree.map(lambda x: sg(x.reshape(-1, x.shape[-1])), latents)
     start_cont = 1.0 - seq["terminal"].reshape(-1)
     (a_loss, (feats, rets, weight, ret_range, entropy)), grads = nnx.value_and_grad(
-        actor_loss, has_aux=True)(nets.actor, nets.world_model, nets.critic, start, start_cont,
-                                  return_scale, bins, cfg, imagine_key)
+        actor_loss, has_aux=True
+    )(
+        nets.actor,
+        nets.world_model,
+        nets.critic,
+        start,
+        start_cont,
+        return_scale,
+        bins,
+        cfg,
+        imagine_key,
+    )
     nets.actor_opt.update(nets.actor, grads)
 
-    c_loss, grads = nnx.value_and_grad(critic_loss)(nets.critic, nets.slow_critic, feats, rets,
-                                                    weight, bins, cfg)
+    c_loss, grads = nnx.value_and_grad(critic_loss)(
+        nets.critic, nets.slow_critic, feats, rets, weight, bins, cfg
+    )
     nets.critic_opt.update(nets.critic, grads)
-    slow = jax.tree.map(lambda s, p: (1 - cfg.slow_critic_rate) * s + cfg.slow_critic_rate * p,
-                        nnx.state(nets.slow_critic), nnx.state(nets.critic))
+    slow = jax.tree.map(
+        lambda s, p: (1 - cfg.slow_critic_rate) * s + cfg.slow_critic_rate * p,
+        nnx.state(nets.slow_critic),
+        nnx.state(nets.critic),
+    )
     nnx.update(nets.slow_critic, slow)
 
     return_scale = cfg.return_norm_decay * return_scale + (1 - cfg.return_norm_decay) * ret_range
-    metrics.update({"loss/actor": a_loss, "loss/critic": c_loss, "train/return_scale": return_scale,
-                    "train/entropy": entropy, "train/imagined_return": rets.mean()})
+    metrics.update(
+        {
+            "loss/actor": a_loss,
+            "loss/critic": c_loss,
+            "train/return_scale": return_scale,
+            "train/entropy": entropy,
+            "train/imagined_return": rets.mean(),
+        }
+    )
     return return_scale, metrics
 
 
@@ -457,12 +534,20 @@ def train(
     bins = jnp.linspace(-20.0, 20.0, cfg.num_bins)
     return_scale = jnp.ones(())
     if resume_from is not None:
-        _, restored = checkpoint.load(resume_from, {"nets": nets_state, "return_scale": return_scale})
+        _, restored = checkpoint.load(
+            resume_from, {"nets": nets_state, "return_scale": return_scale}
+        )
         nets_state, return_scale = restored["nets"], restored["return_scale"]
 
     obs = envs.select_obs(s.env_state.obs, (pk,))[pk]
-    row = {"obs": obs, "action": jnp.zeros((n, A)), "reward": jnp.zeros(n),
-           "terminal": jnp.zeros(n), "last": jnp.zeros(n), "first": jnp.zeros(n)}
+    row = {
+        "obs": obs,
+        "action": jnp.zeros((n, A)),
+        "reward": jnp.zeros(n),
+        "terminal": jnp.zeros(n),
+        "last": jnp.zeros(n),
+        "first": jnp.zeros(n),
+    }
     buffer = replay.init(row, cfg.buffer_size // n)
 
     def collect(state: DreamerV3State, nets: Networks, random: bool) -> DreamerV3State:
@@ -470,17 +555,37 @@ def train(
         key, act_key, random_key, reset_key = jax.random.split(state.key, 4)
         env_state = state.env_state
         obs = envs.select_obs(env_state.obs, (pk,))[pk]
-        action, latent = agent_step(Agent(nets.world_model, nets.actor), state.latent,
-                                    state.prev_action, obs, state.first, act_key, False)
+        action, latent = agent_step(
+            Agent(nets.world_model, nets.actor),
+            state.latent,
+            state.prev_action,
+            obs,
+            state.first,
+            act_key,
+            False,
+        )
         if random:
             action = jax.random.uniform(random_key, (n, A), minval=-1.0, maxval=1.0)
-        buffer = replay.add(state.buffer, {
-            "obs": obs, "action": action, "reward": env_state.reward,
-            "terminal": envs.termination(env_state), "last": env_state.done,
-            "first": state.first})
+        buffer = replay.add(
+            state.buffer,
+            {
+                "obs": obs,
+                "action": action,
+                "reward": env_state.reward,
+                "terminal": envs.termination(env_state),
+                "last": env_state.done,
+                "first": state.first,
+            },
+        )
         next_state = envs.step_or_reset(env, env_state, action, reset_key)
-        return state._replace(buffer=buffer, env_state=next_state, latent=latent,
-                              prev_action=action, first=env_state.done, key=key)
+        return state._replace(
+            buffer=buffer,
+            env_state=next_state,
+            latent=latent,
+            prev_action=action,
+            first=env_state.done,
+            key=key,
+        )
 
     def learn(state: DreamerV3State, nets: Networks):
         key, return_scale, metrics = state.key, state.return_scale, {}
@@ -501,8 +606,9 @@ def train(
 
         @jax.jit(donate_argnums=0)  # update the replay buffer in place
         def run(buffer: replay.ReplayBuffer, state: DreamerV3State):
-            state, metrics = jax.lax.scan(iteration, state._replace(buffer=buffer), None,
-                                          num_iterations)
+            state, metrics = jax.lax.scan(
+                iteration, state._replace(buffer=buffer), None, num_iterations
+            )
             return state.buffer, state._replace(buffer=None), jax.tree.map(lambda x: x[-1], metrics)
 
         def train_fn(state: DreamerV3State):
@@ -511,8 +617,16 @@ def train(
 
         return train_fn
 
-    state = DreamerV3State(nets_state, return_scale, buffer, s.env_state,
-                           nets.world_model.initial((n,)), jnp.zeros((n, A)), jnp.ones(n), key)
+    state = DreamerV3State(
+        nets_state,
+        return_scale,
+        buffer,
+        s.env_state,
+        nets.world_model.initial((n,)),
+        jnp.zeros((n, A)),
+        jnp.ones(n),
+        key,
+    )
     warmup_iterations = max(math.ceil(cfg.learning_starts / n), cfg.seq_len + 1)
     state, _ = make_train_fn(warmup_iterations, random=True)(state)
     iterations = max(1, min(cfg.total_timesteps // (cfg.num_logs * n), 1000))
@@ -529,10 +643,17 @@ def train(
     apply = make_policy_apply(agent_graphdef, pk)
     evaluate = envs.make_evaluator(cfg, s.eval_env, apply, init_carry)
     state, _ = train_loop(
-        cfg, s.logger, state, make_train_fn(iterations, random=False), iterations * n,
-        evaluate, policy_params,
+        cfg,
+        s.logger,
+        state,
+        make_train_fn(iterations, random=False),
+        iterations * n,
+        evaluate,
+        policy_params,
         lambda st: {"nets": st.nets, "return_scale": st.return_scale},
-        jax.random.key(cfg.seed + 1), warmup_iterations * n)
+        jax.random.key(cfg.seed + 1),
+        warmup_iterations * n,
+    )
     s.logger.close()
     return Policy(NAME, policy_params(state), apply, init_carry)
 

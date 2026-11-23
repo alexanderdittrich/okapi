@@ -19,8 +19,18 @@ from okapi.common.config import TrainConfig
 
 LogCallback = Callable[[dict[str, float], int], None]
 
-_PACKAGES = ("jax", "flax", "optax", "orbax-checkpoint", "mujoco", "mujoco-mjx",
-             "playground", "warp-lang", "brax", "numpy")
+_PACKAGES = (
+    "jax",
+    "flax",
+    "optax",
+    "orbax-checkpoint",
+    "mujoco",
+    "mujoco-mjx",
+    "playground",
+    "warp-lang",
+    "brax",
+    "numpy",
+)
 
 
 def _version(pkg: str) -> str:
@@ -104,7 +114,8 @@ class Logger:
             import wandb
 
             self._wandb = wandb.init(
-                project=cfg.wandb_project, name=name,
+                project=cfg.wandb_project,
+                name=name,
                 config={"algorithm": algorithm, **cfg.to_dict(), "environment": env_config},
             )
         if cfg.verbose:
@@ -149,12 +160,17 @@ class Logger:
         total = self.cfg.total_timesteps
         head = f"[{step / 1e6:8.2f}M / {total / 1e6:.2f}M]"
         if "eval/episode_reward" in metrics:
-            head += (f"  eval {metrics['eval/episode_reward']:9.2f}"
-                     f" ± {metrics['eval/episode_reward_std']:.1f}")
+            head += (
+                f"  eval {metrics['eval/episode_reward']:9.2f}"
+                f" ± {metrics['eval/episode_reward_std']:.1f}"
+            )
         if "time/sps" in metrics:
             head += f"  sps {metrics['time/sps']:9.0f}"
-        rest = [f"{k.replace('train/', '').replace('/', '_')}={v:.3g}"
-                for k, v in sorted(metrics.items()) if k.startswith(("loss/", "train/"))]
+        rest = [
+            f"{k.replace('train/', '').replace('/', '_')}={v:.3g}"
+            for k, v in sorted(metrics.items())
+            if k.startswith(("loss/", "train/"))
+        ]
         print(head + ("  " + " ".join(rest) if rest else ""), flush=True)
 
     def close(self) -> None:

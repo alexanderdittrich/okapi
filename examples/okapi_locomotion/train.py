@@ -1,7 +1,7 @@
 """Train the okapi to walk with PPO and render a GIF.
 
-    uv run examples/okapi_locomotion/train.py                  # train + render
-    uv run examples/okapi_locomotion/train.py --render runs/okapi-ppo-...   # render only
+uv run examples/okapi_locomotion/train.py                  # train + render
+uv run examples/okapi_locomotion/train.py --render runs/okapi-ppo-...   # render only
 """
 
 from __future__ import annotations
@@ -41,8 +41,12 @@ CONFIG = PPOConfig(
 )
 
 # (seconds, [vx, vy, yaw rate]): walk, speed up, turn left, turn right
-SCRIPT = [(2.5, [0.6, 0.0, 0.0]), (2.5, [1.2, 0.0, 0.0]), (2.5, [0.8, 0.0, 0.6]),
-          (2.5, [0.8, 0.0, -0.6])]
+SCRIPT = [
+    (2.5, [0.6, 0.0, 0.0]),
+    (2.5, [1.2, 0.0, 0.0]),
+    (2.5, [0.8, 0.0, 0.6]),
+    (2.5, [0.8, 0.0, -0.6]),
+]
 
 
 def render(run_dir: str, output: str) -> None:
@@ -56,8 +60,11 @@ def render(run_dir: str, output: str) -> None:
     state = reset(jax.random.key(3))
     # start at the origin facing +x, so the camera sees the okapi from the side
     data = state.data
-    state = state.replace(data=data.replace(qpos=data.qpos.at[:7].set(env._init_q[:7]),
-                                            qvel=jnp.zeros_like(data.qvel)))
+    state = state.replace(
+        data=data.replace(
+            qpos=data.qpos.at[:7].set(env._init_q[:7]), qvel=jnp.zeros_like(data.qvel)
+        )
+    )
     states = []
     for seconds, command in SCRIPT:
         for _ in range(int(seconds / env.dt)):
@@ -67,10 +74,10 @@ def render(run_dir: str, output: str) -> None:
             states.append(state)
     option = mujoco.MjvOption()
     every = 3  # ~17 fps keeps the GIF small
-    frames = env.render(states[::every], camera="cinematic", height=270, width=480,
-                        scene_option=option)
-    imageio.mimsave(output, [np.asarray(f) for f in frames], fps=round(1 / env.dt / every),
-                    loop=0)
+    frames = env.render(
+        states[::every], camera="cinematic", height=270, width=480, scene_option=option
+    )
+    imageio.mimsave(output, [np.asarray(f) for f in frames], fps=round(1 / env.dt / every), loop=0)
     print(f"Saved {output}")
 
 
@@ -81,7 +88,9 @@ def main() -> None:
     args = ap.parse_args()
     run_dir = args.render
     if run_dir is None:
-        train(CONFIG, env_factory=lambda: OkapiJoystick(scenery=False))  # decoration only slows training
+        train(
+            CONFIG, env_factory=lambda: OkapiJoystick(scenery=False)
+        )  # decoration only slows training
         run_dir = str(sorted(Path(CONFIG.log_dir).glob("okapijoystick-ppo-*"))[-1])
     render(run_dir, args.output)
 

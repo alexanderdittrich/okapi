@@ -103,5 +103,14 @@ def setup(
         "action_size": int(env.action_size),
     }
     logger = Logger(cfg, algorithm, env_config_dict(raw_env), spec, log_callback, start_step)
-    return Setup(env, eval_env, env_state, policy_key, value_key, obs_shapes,
-                 int(env.action_size), logger, key)
+    return Setup(
+        env,
+        eval_env,
+        env_state,
+        policy_key,
+        value_key,
+        obs_shapes,
+        int(env.action_size),
+        logger,
+        key,
+    )

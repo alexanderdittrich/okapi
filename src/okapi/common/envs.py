@@ -200,11 +200,16 @@ def make_evaluator(
             active = active * (1.0 - state.done)
             return (state, policy_carry, ret, length, sums, active, key), None
 
-        init = (state, init_carry(n), zeros, zeros, {k: zeros for k in metric_keys},
-                jnp.ones(n), key)
-        (_, _, ret, length, sums, _, _), _ = jax.lax.scan(
-            step, init, jnp.arange(num_steps)
+        init = (
+            state,
+            init_carry(n),
+            zeros,
+            zeros,
+            {k: zeros for k in metric_keys},
+            jnp.ones(n),
+            key,
         )
+        (_, _, ret, length, sums, _, _), _ = jax.lax.scan(step, init, jnp.arange(num_steps))
         return {
             "eval/episode_reward": ret.mean(),
             "eval/episode_reward_std": ret.std(),

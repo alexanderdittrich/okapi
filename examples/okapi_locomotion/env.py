@@ -42,8 +42,9 @@ def default_config() -> config_dict.ConfigDict:
         swing_height=0.08,  # m
         noise_config=config_dict.create(
             level=1.0,
-            scales=config_dict.create(joint_pos=0.03, joint_vel=1.5, gyro=0.2, gravity=0.05,
-                                      linvel=0.1),
+            scales=config_dict.create(
+                joint_pos=0.03, joint_vel=1.5, gyro=0.2, gravity=0.05, linvel=0.1
+            ),
         ),
         reward_config=config_dict.create(
             scales=config_dict.create(
@@ -76,8 +77,12 @@ def default_config() -> config_dict.ConfigDict:
 class OkapiJoystick(mjx_env.MjxEnv):
     """Velocity-tracking locomotion for the okapi quadruped."""
 
-    def __init__(self, config: config_dict.ConfigDict | None = None,
-                 config_overrides: dict[str, Any] | None = None, scenery: bool = True):
+    def __init__(
+        self,
+        config: config_dict.ConfigDict | None = None,
+        config_overrides: dict[str, Any] | None = None,
+        scenery: bool = True,
+    ):
         """``scenery`` adds decorative rainforest geoms (no effect on physics or observations)."""
         super().__init__(config or default_config(), config_overrides)
         spec = mujoco.MjSpec.from_file(str(XML_PATH))
@@ -99,7 +104,8 @@ class OkapiJoystick(mjx_env.MjxEnv):
         self._foot_site_ids = np.array([m.site(n).id for n in FEET])
         self._contact_adr = np.array([m.sensor_adr[m.sensor(f"{n}_floor_found").id] for n in FEET])
         self._foot_vel_adr = np.array(
-            [[m.sensor_adr[m.sensor(f"{n}_vel").id] + k for k in range(3)] for n in FEET])
+            [[m.sensor_adr[m.sensor(f"{n}_vel").id] + k for k in range(3)] for n in FEET]
+        )
         self._cmd_a = jnp.array(self._config.command_config.a)
         self._cmd_b = jnp.array(self._config.command_config.b)
 
@@ -133,10 +139,14 @@ class OkapiJoystick(mjx_env.MjxEnv):
         qpos = self._init_q.at[0:2].add(jax.random.uniform(xy_key, (2,), minval=-0.5, maxval=0.5))
         yaw = jax.random.uniform(yaw_key, (), minval=-jnp.pi, maxval=jnp.pi)
         qpos = qpos.at[3:7].set(jnp.array([jnp.cos(yaw / 2), 0.0, 0.0, jnp.sin(yaw / 2)]))
-        qvel = jnp.zeros(self.mjx_model.nv).at[0:6].set(
-            jax.random.uniform(vel_key, (6,), minval=-0.5, maxval=0.5))
-        data = mjx_env.make_data(self.mj_model, qpos=qpos, qvel=qvel, ctrl=self._default_pose,
-                                 impl=self._config.impl)
+        qvel = (
+            jnp.zeros(self.mjx_model.nv)
+            .at[0:6]
+            .set(jax.random.uniform(vel_key, (6,), minval=-0.5, maxval=0.5))
+        )
+        data = mjx_env.make_data(
+            self.mj_model, qpos=qpos, qvel=qvel, ctrl=self._default_pose, impl=self._config.impl
+        )
         data = mjx.forward(self.mjx_model, data)
 
         cmd = jax.random.uniform(cmd_key, (3,), minval=-self._cmd_a, maxval=self._cmd_a)
@@ -170,10 +180,12 @@ class OkapiJoystick(mjx_env.MjxEnv):
         info["steps_until_next_cmd"] -= 1
         info["rng"], cmd_key, time_key = jax.random.split(info["rng"], 3)
         resample = info["steps_until_next_cmd"] <= 0
-        info["command"] = jnp.where(resample, self._sample_command(cmd_key, info["command"]),
-                                    info["command"])
-        info["steps_until_next_cmd"] = jnp.where(resample, self._hold_time(time_key),
-                                                 info["steps_until_next_cmd"])
+        info["command"] = jnp.where(
+            resample, self._sample_command(cmd_key, info["command"]), info["command"]
+        )
+        info["steps_until_next_cmd"] = jnp.where(
+            resample, self._hold_time(time_key), info["steps_until_next_cmd"]
+        )
         for k, v in rewards.items():
             state.metrics[f"reward/{k}"] = v
         obs = self._get_obs(data, info)
@@ -192,27 +204,46 @@ class OkapiJoystick(mjx_env.MjxEnv):
         jpos, jvel = data.qpos[7:], data.qvel[6:]
         info["rng"], *keys = jax.random.split(info["rng"], 6)
         noisy = lambda x, scale, k: x + (2 * jax.random.uniform(k, x.shape) - 1) * cfg.level * scale
-        clock = jnp.array([jnp.cos(2 * jnp.pi * info["phase"]), jnp.sin(2 * jnp.pi * info["phase"])])
-        state = jnp.concatenate([
-            noisy(linvel, cfg.scales.linvel, keys[0]),
-            noisy(gyro, cfg.scales.gyro, keys[1]),
-            noisy(gravity, cfg.scales.gravity, keys[2]),
-            noisy(jpos, cfg.scales.joint_pos, keys[3]) - self._default_pose,
-            noisy(jvel, cfg.scales.joint_vel, keys[4]),
-            info["last_act"],
-            info["command"],
-            clock,
-        ])  # 50
-        privileged_state = jnp.concatenate([
-            state, linvel, gyro, gravity, jpos - self._default_pose, jvel, data.actuator_force,
-            data.sensordata[self._foot_vel_adr].ravel(), self._foot_heights(data),
-        ])  # 50 + 61
+        clock = jnp.array(
+            [jnp.cos(2 * jnp.pi * info["phase"]), jnp.sin(2 * jnp.pi * info["phase"])]
+        )
+        state = jnp.concatenate(
+            [
+                noisy(linvel, cfg.scales.linvel, keys[0]),
+                noisy(gyro, cfg.scales.gyro, keys[1]),
+                noisy(gravity, cfg.scales.gravity, keys[2]),
+                noisy(jpos, cfg.scales.joint_pos, keys[3]) - self._default_pose,
+                noisy(jvel, cfg.scales.joint_vel, keys[4]),
+                info["last_act"],
+                info["command"],
+                clock,
+            ]
+        )  # 50
+        privileged_state = jnp.concatenate(
+            [
+                state,
+                linvel,
+                gyro,
+                gravity,
+                jpos - self._default_pose,
+                jvel,
+                data.actuator_force,
+                data.sensordata[self._foot_vel_adr].ravel(),
+                self._foot_heights(data),
+            ]
+        )  # 50 + 61
         return {"state": state, "privileged_state": privileged_state}
 
     # ── Reward ───────────────────────────────────────────────────────────────
 
-    def _get_reward(self, data: mjx.Data, action: jax.Array, info: dict[str, Any],
-                    done: jax.Array, contact: jax.Array) -> dict[str, jax.Array]:
+    def _get_reward(
+        self,
+        data: mjx.Data,
+        action: jax.Array,
+        info: dict[str, Any],
+        done: jax.Array,
+        contact: jax.Array,
+    ) -> dict[str, jax.Array]:
         rc = self._config.reward_config
         cmd = info["command"]
         moving = jnp.linalg.norm(cmd) > 0.05
@@ -223,7 +254,9 @@ class OkapiJoystick(mjx_env.MjxEnv):
         height_error = self._foot_heights(data) - self._swing_reference(info["phase"])
         feet_phase = jnp.exp(-jnp.sum(jnp.square(height_error)) / rc.phase_sigma) * moving
         return {
-            "tracking_lin_vel": jnp.exp(-jnp.sum(jnp.square(cmd[:2] - linvel[:2])) / rc.tracking_sigma),
+            "tracking_lin_vel": jnp.exp(
+                -jnp.sum(jnp.square(cmd[:2] - linvel[:2])) / rc.tracking_sigma
+            ),
             "tracking_ang_vel": jnp.exp(-jnp.square(cmd[2] - gyro[2]) / rc.tracking_sigma),
             "feet_phase": feet_phase,
             "lin_vel_z": jnp.square(data.sensordata[2]),
@@ -237,8 +270,9 @@ class OkapiJoystick(mjx_env.MjxEnv):
             "torques": jnp.sqrt(jnp.sum(jnp.square(force))) + jnp.sum(jnp.abs(force)),
             "energy": jnp.sum(jnp.abs(jvel * force)),
             "action_rate": jnp.sum(jnp.square(action - info["last_act"])),
-            "action_smoothness": jnp.sum(jnp.square(
-                action - 2 * info["last_act"] + info["last_last_act"])),
+            "action_smoothness": jnp.sum(
+                jnp.square(action - 2 * info["last_act"] + info["last_last_act"])
+            ),
             "feet_slip": jnp.sum(jnp.sum(jnp.square(foot_vel_xy), -1) * contact) * moving,
         }
 

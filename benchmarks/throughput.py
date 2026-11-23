@@ -20,17 +20,32 @@ import okapi
 from run import ROOT, SETTINGS
 
 OUTPUT = ROOT / "docs" / "benchmark_throughput.json"
-BUDGET = {"ppo": 30_000_000, "ppo_gru": 15_000_000, "sac": 2_000_000, "simbav2": 1_000_000,
-          "bro": 1_000_000, "dreamerv3": 150_000, "tdmpc2": 100_000}
+BUDGET = {
+    "ppo": 30_000_000,
+    "ppo_gru": 15_000_000,
+    "sac": 2_000_000,
+    "simbav2": 1_000_000,
+    "bro": 1_000_000,
+    "dreamerv3": 150_000,
+    "tdmpc2": 100_000,
+}
 
 
 def measure(env_id: str, algo: str) -> float:
     module = okapi.get_algorithm(algo)
     log_dir = tempfile.mkdtemp()
     sps: list[float] = []
-    cfg = module.Config.from_dict({
-        **SETTINGS[env_id][algo], "env_id": env_id, "total_timesteps": BUDGET[algo],
-        "num_evals": 1, "num_logs": 10, "log_dir": log_dir, "verbose": False})
+    cfg = module.Config.from_dict(
+        {
+            **SETTINGS[env_id][algo],
+            "env_id": env_id,
+            "total_timesteps": BUDGET[algo],
+            "num_evals": 1,
+            "num_logs": 10,
+            "log_dir": log_dir,
+            "verbose": False,
+        }
+    )
     module.train(cfg, log_callback=lambda m, step: sps.append(m.get("time/sps", np.nan)))
     shutil.rmtree(log_dir)
     return float(np.nanmedian(sps[2:]))  # skip compilation and the first evaluation

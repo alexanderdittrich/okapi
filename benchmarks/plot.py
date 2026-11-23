@@ -54,8 +54,15 @@ def main() -> None:
             mean = rewards.mean(0)
             ax.fill_between(steps, rewards.min(0), rewards.max(0), color=color, alpha=0.15, lw=0)
             ax.plot(steps, mean, color=color, ls=style, lw=2, label=f"{label} (n={len(rewards)})")
-            ax.annotate(label, (steps[-1], mean[-1]), xytext=(4, 0), textcoords="offset points",
-                        va="center", fontsize=8, color=INK)
+            ax.annotate(
+                label,
+                (steps[-1], mean[-1]),
+                xytext=(4, 0),
+                textcoords="offset points",
+                va="center",
+                fontsize=8,
+                color=INK,
+            )
         ax.set_xscale("log")
         ax.set_title(env_id, color=INK, fontsize=11, loc="left")
         ax.set_xlabel("environment steps", color=MUTED)

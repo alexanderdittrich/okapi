@@ -55,8 +55,9 @@ def load_factory(spec: str):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("run_dir", help="Run directory (contains metadata.yaml and checkpoints/)")
     ap.add_argument("--evals", type=int, default=5, help="Rollouts per checkpoint")
     ap.add_argument("--stochastic", action="store_true", help="Sample actions")
@@ -68,8 +69,9 @@ def main() -> None:
     run_dir = Path(args.run_dir).resolve()
     meta = checkpoint.load_metadata(run_dir)
     algo = okapi.get_algorithm(meta["algorithm"])
-    cfg = TrainConfig.from_dict({k: v for k, v in meta["config"].items()
-                                 if k in TrainConfig.__dataclass_fields__})
+    cfg = TrainConfig.from_dict(
+        {k: v for k, v in meta["config"].items() if k in TrainConfig.__dataclass_fields__}
+    )
     if not args.gpu and args.env is None:
         cfg.impl = "jax"  # MuJoCo Warp needs a GPU
     factory = load_factory(args.env) if args.env else None
@@ -96,13 +98,15 @@ def main() -> None:
             state, policy_carry, key = carry
             key, act_key = jax.random.split(key)
             first = jnp.full(args.evals, t == 0, jnp.float32)
-            action, policy_carry = policy0.apply(params, policy_carry, state.obs, first, act_key,
-                                                 not args.stochastic)
+            action, policy_carry = policy0.apply(
+                params, policy_carry, state.obs, first, act_key, not args.stochastic
+            )
             out = (state.data.qpos, state.data.qvel, state.done)
             return (env.step(state, action), policy_carry, key), out
 
         _, (qpos, qvel, done) = jax.lax.scan(
-            step, (state, policy0.init_carry(args.evals), key), jnp.arange(n_steps))
+            step, (state, policy0.init_carry(args.evals), key), jnp.arange(n_steps)
+        )
         return qpos, qvel, done
 
     rollouts: list[tuple[int, list]] = []
@@ -145,10 +149,13 @@ def main() -> None:
                 fi[0] = (t + 1) % len(qpos)
             viewer.sync()
             left = "Checkpoint\nEval\nFrame" + ("\n[PAUSED]" if paused[0] else "")
-            right = (f"{ci[0] + 1}/{len(steps)}  (step {gstep:,})\n"
-                     f"{ei[0] + 1}/{args.evals}\n{fi[0]}/{len(qpos)}")
-            viewer.set_texts((mujoco.mjtFontScale.mjFONTSCALE_150,
-                              mujoco.mjtGridPos.mjGRID_TOPLEFT, left, right))
+            right = (
+                f"{ci[0] + 1}/{len(steps)}  (step {gstep:,})\n"
+                f"{ei[0] + 1}/{args.evals}\n{fi[0]}/{len(qpos)}"
+            )
+            viewer.set_texts(
+                (mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT, left, right)
+            )
             time.sleep(dt)
 
 

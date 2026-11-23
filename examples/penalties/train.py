@@ -1,8 +1,8 @@
 """Penalty shoot-out curriculum: train a striker, then a keeper against it, then render.
 
-    uv run examples/penalties/train.py                       # both stages + GIF
-    uv run examples/penalties/train.py --stage keeper --striker runs/penalties-striker-...
-    uv run examples/penalties/train.py --stage render --striker runs/... --keeper runs/...
+uv run examples/penalties/train.py                       # both stages + GIF
+uv run examples/penalties/train.py --stage keeper --striker runs/penalties-striker-...
+uv run examples/penalties/train.py --stage render --striker runs/... --keeper runs/...
 """
 
 from __future__ import annotations
@@ -39,10 +39,16 @@ BASE = PPOConfig(
     num_evals=20,
     checkpoint=True,
 )
-STRIKER = dataclasses.replace(BASE, env_id="Penalties-Striker", run_name="penalties-striker",
-                              total_timesteps=20_000_000, seed=0)
-KEEPER = dataclasses.replace(BASE, env_id="Penalties-Keeper", run_name="penalties-keeper",
-                             total_timesteps=45_000_000, seed=1)
+STRIKER = dataclasses.replace(
+    BASE,
+    env_id="Penalties-Striker",
+    run_name="penalties-striker",
+    total_timesteps=20_000_000,
+    seed=0,
+)
+KEEPER = dataclasses.replace(
+    BASE, env_id="Penalties-Keeper", run_name="penalties-keeper", total_timesteps=45_000_000, seed=1
+)
 
 
 def frozen(run_dir: str):
@@ -51,8 +57,9 @@ def frozen(run_dir: str):
     return lambda obs: policy(obs)[0]
 
 
-def render(striker_dir: str, keeper_dir: str, output: str, shots: int = 4,
-           keeper_step: int | None = None) -> None:
+def render(
+    striker_dir: str, keeper_dir: str, output: str, shots: int = 4, keeper_step: int | None = None
+) -> None:
     import imageio.v2 as imageio
 
     env = PenaltyKick("keeper", striker_policy=frozen(striker_dir))
@@ -80,7 +87,9 @@ def main() -> None:
     ap.add_argument("--stage", choices=["all", "striker", "keeper", "render"], default="all")
     ap.add_argument("--striker", default=str(Path(STRIKER.log_dir) / STRIKER.run_name))
     ap.add_argument("--keeper", default=str(Path(KEEPER.log_dir) / KEEPER.run_name))
-    ap.add_argument("--keeper_step", type=int, default=None, help="Keeper checkpoint (default: latest)")
+    ap.add_argument(
+        "--keeper_step", type=int, default=None, help="Keeper checkpoint (default: latest)"
+    )
     ap.add_argument("--output", default="docs/_static/penalties.gif")
     args = ap.parse_args()
     if args.stage in ("all", "striker"):

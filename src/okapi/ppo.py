@@ -110,8 +110,11 @@ class NormalTanhDistribution:
 
     def log_prob(self, raw_action: jax.Array) -> jax.Array:
         """Log-density of ``tanh(raw_action)``, summed over action dimensions."""
-        gaussian = (-0.5 * jnp.square((raw_action - self.loc) / self.scale)
-                    - 0.5 * jnp.log(2.0 * jnp.pi) - jnp.log(self.scale))
+        gaussian = (
+            -0.5 * jnp.square((raw_action - self.loc) / self.scale)
+            - 0.5 * jnp.log(2.0 * jnp.pi)
+            - jnp.log(self.scale)
+        )
         return jnp.sum(gaussian - self._tanh_log_jacobian(raw_action), axis=-1)
 
     def entropy(self, key: jax.Array) -> jax.Array:
@@ -127,12 +130,19 @@ class NormalTanhDistribution:
 class ActorCritic(nnx.Module):
     """Separate policy and value MLPs."""
 
-    def __init__(self, policy_obs_size: int, value_obs_size: int, action_size: int,
-                 cfg: PPOConfig, *, rngs: nnx.Rngs):
-        self.policy_net = MLP(policy_obs_size, cfg.actor_hidden_sizes, 2 * action_size,
-                              cfg.activation, rngs=rngs)
-        self.value_net = MLP(value_obs_size, cfg.critic_hidden_sizes, 1, cfg.activation,
-                             rngs=rngs)
+    def __init__(
+        self,
+        policy_obs_size: int,
+        value_obs_size: int,
+        action_size: int,
+        cfg: PPOConfig,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.policy_net = MLP(
+            policy_obs_size, cfg.actor_hidden_sizes, 2 * action_size, cfg.activation, rngs=rngs
+        )
+        self.value_net = MLP(value_obs_size, cfg.critic_hidden_sizes, 1, cfg.activation, rngs=rngs)
 
     def policy(self, obs: jax.Array) -> NormalTanhDistribution:
         return NormalTanhDistribution(self.policy_net(obs))
@@ -141,11 +151,18 @@ class ActorCritic(nnx.Module):
         return self.value_net(obs).squeeze(-1)
 
 
-def make_model(cfg: PPOConfig, obs_shapes: dict[str, tuple[int, ...]], policy_key: str,
-               value_key: str, action_size: int, key: jax.Array):
+def make_model(
+    cfg: PPOConfig,
+    obs_shapes: dict[str, tuple[int, ...]],
+    policy_key: str,
+    value_key: str,
+    action_size: int,
+    key: jax.Array,
+):
     """Build the actor-critic and its optimizer."""
-    model = ActorCritic(obs_shapes[policy_key][-1], obs_shapes[value_key][-1], action_size,
-                        cfg, rngs=nnx.Rngs(key))
+    model = ActorCritic(
+        obs_shapes[policy_key][-1], obs_shapes[value_key][-1], action_size, cfg, rngs=nnx.Rngs(key)
+    )
     tx = optax.adam(cfg.learning_rate, eps=1e-5)
     if cfg.max_grad_norm is not None:
         tx = optax.chain(optax.clip_by_global_norm(cfg.max_grad_norm), tx)
@@ -179,8 +196,13 @@ class Transition(NamedTuple):
 
 
 def compute_gae(
-    rewards: jax.Array, values: jax.Array, dones: jax.Array, truncations: jax.Array,
-    bootstrap_value: jax.Array, gamma: float, gae_lambda: float,
+    rewards: jax.Array,
+    values: jax.Array,
+    dones: jax.Array,
+    truncations: jax.Array,
+    bootstrap_value: jax.Array,
+    gamma: float,
+    gae_lambda: float,
 ) -> tuple[jax.Array, jax.Array]:
     """Brax GAE: truncated steps are masked out instead of treated as terminal.
 
@@ -197,26 +219,36 @@ def compute_gae(
         acc = delta + gamma * (1.0 - term) * tmask * gae_lambda * acc
         return acc, acc
 
-    _, vs_minus_v = jax.lax.scan(step, jnp.zeros_like(bootstrap_value),
-                                 (deltas, termination, trunc_mask), reverse=True)
+    _, vs_minus_v = jax.lax.scan(
+        step, jnp.zeros_like(bootstrap_value), (deltas, termination, trunc_mask), reverse=True
+    )
     vs = vs_minus_v + values
     vs_next = jnp.concatenate([vs[1:], bootstrap_value[None]], axis=0)
     advantages = (rewards + gamma * (1.0 - termination) * vs_next - values) * trunc_mask
     return jax.lax.stop_gradient(vs), jax.lax.stop_gradient(advantages)
 
 
-def ppo_loss(model: ActorCritic, traj: Transition, bootstrap_obs: jax.Array,
-             obs_stats: envs.ObsStats, policy_key: str, value_key: str, cfg: PPOConfig,
-             key: jax.Array) -> tuple[jax.Array, dict[str, jax.Array]]:
+def ppo_loss(
+    model: ActorCritic,
+    traj: Transition,
+    bootstrap_obs: jax.Array,
+    obs_stats: envs.ObsStats,
+    policy_key: str,
+    value_key: str,
+    cfg: PPOConfig,
+    key: jax.Array,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Clipped surrogate + value + entropy loss on a ``[T, B]`` minibatch of trajectories."""
     T, B = traj.reward.shape
     obs = envs.normalize_obs(traj.obs, obs_stats)
     dist = model.policy(obs[policy_key].reshape(T * B, -1))
     values = model.value(obs[value_key].reshape(T * B, -1)).reshape(T, B)
-    bootstrap_value = model.value(envs.normalize_obs(
-        {value_key: bootstrap_obs}, {value_key: obs_stats[value_key]})[value_key])
-    targets, advantages = compute_gae(traj.reward, values, traj.done, traj.truncation,
-                                      bootstrap_value, cfg.gamma, cfg.gae_lambda)
+    bootstrap_value = model.value(
+        envs.normalize_obs({value_key: bootstrap_obs}, {value_key: obs_stats[value_key]})[value_key]
+    )
+    targets, advantages = compute_gae(
+        traj.reward, values, traj.done, traj.truncation, bootstrap_value, cfg.gamma, cfg.gae_lambda
+    )
     advantages = advantages.reshape(T * B)
     if cfg.norm_adv:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -225,7 +257,9 @@ def ppo_loss(model: ActorCritic, traj: Transition, bootstrap_obs: jax.Array,
     ratio = jnp.exp(logprob - traj.logprob.reshape(T * B))
     clipped = jnp.clip(ratio, 1.0 - cfg.clip_coef, 1.0 + cfg.clip_coef)
     policy_loss = -jnp.minimum(ratio * advantages, clipped * advantages).mean()
-    value_loss = 0.5 * cfg.vf_coef * jnp.mean(jnp.square(values.reshape(T * B) - targets.reshape(T * B)))
+    value_loss = (
+        0.5 * cfg.vf_coef * jnp.mean(jnp.square(values.reshape(T * B) - targets.reshape(T * B)))
+    )
     entropy = dist.entropy(key).mean()
     total = policy_loss + value_loss - cfg.ent_coef * entropy
     return total, {
@@ -274,7 +308,8 @@ def train(
     start_step = 0
     if resume_from is not None:
         start_step, restored = checkpoint.load(
-            resume_from, {"model_opt": model_opt, "obs_stats": obs_stats})
+            resume_from, {"model_opt": model_opt, "obs_stats": obs_stats}
+        )
         model_opt, obs_stats = restored["model_opt"], restored["obs_stats"]
 
     def collect(model: ActorCritic, obs_stats, env_state, key):
@@ -289,8 +324,13 @@ def train(
             next_state = env.step(env_state, dist.postprocess(raw_action))
             truncation = next_state.info.get("truncation", jnp.zeros_like(next_state.done))
             return (next_state, key), Transition(
-                obs, raw_action, dist.log_prob(raw_action),
-                next_state.reward * cfg.reward_scaling, next_state.done, truncation)
+                obs,
+                raw_action,
+                dist.log_prob(raw_action),
+                next_state.reward * cfg.reward_scaling,
+                next_state.done,
+                truncation,
+            )
 
         (env_state, _), traj = jax.lax.scan(step, (env_state, key), None, cfg.num_steps)
         return env_state, traj, envs.select_obs(env_state.obs, (vk,))[vk]
@@ -319,10 +359,12 @@ def train(
             return env_state, (traj, bootstrap)
 
         env_state, (rounds, bootstrap) = jax.lax.scan(
-            collect_round, state.env_state, jax.random.split(rollout_key, cfg.num_rollout_rounds))
+            collect_round, state.env_state, jax.random.split(rollout_key, cfg.num_rollout_rounds)
+        )
         # [R, T, N, ...] → [T, R*N, ...]
-        batch = jax.tree.map(lambda x: jnp.swapaxes(x, 0, 1).reshape(
-            cfg.num_steps, total_envs, *x.shape[3:]), rounds)
+        batch = jax.tree.map(
+            lambda x: jnp.swapaxes(x, 0, 1).reshape(cfg.num_steps, total_envs, *x.shape[3:]), rounds
+        )
         bootstrap = bootstrap.reshape(total_envs, *bootstrap.shape[2:])
         obs_stats = envs.update_obs_stats(state.obs_stats, batch.obs)
 
@@ -330,23 +372,27 @@ def train(
 
         def epoch(model_opt, epoch_key):
             perm_key, loss_key = jax.random.split(epoch_key)
-            perm = jax.random.permutation(perm_key, total_envs).reshape(cfg.num_minibatches, mb_size)
+            perm = jax.random.permutation(perm_key, total_envs).reshape(
+                cfg.num_minibatches, mb_size
+            )
 
             def minibatch(model_opt, x):
                 idx, mb_key = x
                 model, optimizer = nnx.merge(graphdef, model_opt)
                 traj = jax.tree.map(lambda v: v[:, idx], batch)
-                (_, metrics), grads = grad_fn(model, traj, bootstrap[idx], obs_stats, pk, vk,
-                                              cfg, mb_key)
+                (_, metrics), grads = grad_fn(
+                    model, traj, bootstrap[idx], obs_stats, pk, vk, cfg, mb_key
+                )
                 optimizer.update(model, grads)
                 return nnx.split((model, optimizer))[1], metrics
 
-            return jax.lax.scan(minibatch, model_opt,
-                                (perm, jax.random.split(loss_key, cfg.num_minibatches)))
+            return jax.lax.scan(
+                minibatch, model_opt, (perm, jax.random.split(loss_key, cfg.num_minibatches))
+            )
 
         model_opt, metrics = jax.lax.scan(
-            epoch, nnx.split((model, optimizer))[1],
-            jax.random.split(update_key, cfg.update_epochs))
+            epoch, nnx.split((model, optimizer))[1], jax.random.split(update_key, cfg.update_epochs)
+        )
         metrics = jax.tree.map(jnp.mean, metrics)
         metrics["train/reward_per_step"] = batch.reward.mean() / cfg.reward_scaling
         return PPOState(model_opt, obs_stats, env_state, key), metrics
@@ -359,9 +405,17 @@ def train(
     evaluate = envs.make_evaluator(cfg, s.eval_env, apply, lambda n: ())
     state = PPOState(model_opt, obs_stats, s.env_state, key)
     state, _ = train_loop(
-        cfg, s.logger, state, train_iteration, cfg.steps_per_iteration, evaluate,
-        policy_params, lambda st: {"model_opt": st.model_opt, "obs_stats": st.obs_stats},
-        jax.random.key(cfg.seed + 1), start_step)
+        cfg,
+        s.logger,
+        state,
+        train_iteration,
+        cfg.steps_per_iteration,
+        evaluate,
+        policy_params,
+        lambda st: {"model_opt": st.model_opt, "obs_stats": st.obs_stats},
+        jax.random.key(cfg.seed + 1),
+        start_step,
+    )
     s.logger.close()
     return Policy(NAME, policy_params(state), apply)
 

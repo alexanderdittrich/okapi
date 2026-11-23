@@ -28,25 +28,60 @@ RESULTS = ROOT / "docs" / "benchmark_results.json"
 # Per-environment hyperparameters on top of each algorithm's defaults.
 # PPO uses MuJoCo Playground's tuned Brax PPO settings.
 CHEETAH_PPO = dict(
-    num_envs=2048, total_timesteps=60_000_000, num_steps=30, num_rollout_rounds=16,
-    num_minibatches=32, update_epochs=16, learning_rate=1e-3, gamma=0.995, clip_coef=0.3,
-    reward_scaling=10.0, max_grad_norm=None, actor_hidden_sizes=[32, 32, 32, 32],
-    critic_hidden_sizes=[256, 256, 256, 256, 256], warmup_stats=False)
+    num_envs=2048,
+    total_timesteps=60_000_000,
+    num_steps=30,
+    num_rollout_rounds=16,
+    num_minibatches=32,
+    update_epochs=16,
+    learning_rate=1e-3,
+    gamma=0.995,
+    clip_coef=0.3,
+    reward_scaling=10.0,
+    max_grad_norm=None,
+    actor_hidden_sizes=[32, 32, 32, 32],
+    critic_hidden_sizes=[256, 256, 256, 256, 256],
+    warmup_stats=False,
+)
 GO1 = dict(value_obs_key="privileged_state")
-GO1_PPO = dict(GO1, num_envs=8192, total_timesteps=200_000_000, num_steps=20,
-               num_minibatches=32, update_epochs=4, learning_rate=3e-4, gamma=0.97,
-               clip_coef=0.3, max_grad_norm=1.0, warmup_stats=False)
+GO1_PPO = dict(
+    GO1,
+    num_envs=8192,
+    total_timesteps=200_000_000,
+    num_steps=20,
+    num_minibatches=32,
+    update_epochs=4,
+    learning_rate=3e-4,
+    gamma=0.97,
+    clip_coef=0.3,
+    max_grad_norm=1.0,
+    warmup_stats=False,
+)
 CHEETAH_OFF_POLICY = dict(total_timesteps=5_000_000)
-GO1_OFF_POLICY = dict(GO1, total_timesteps=10_000_000, num_envs=1024, batch_size=8192,
-                      updates_per_step=4, gamma=0.97, n_step=3, buffer_size=1024 * 1024,
-                      learning_starts=32_768)
+GO1_OFF_POLICY = dict(
+    GO1,
+    total_timesteps=10_000_000,
+    num_envs=1024,
+    batch_size=8192,
+    updates_per_step=4,
+    gamma=0.97,
+    n_step=3,
+    buffer_size=1024 * 1024,
+    learning_starts=32_768,
+)
 
 SETTINGS: dict[str, dict[str, dict]] = {
     "CheetahRun": {
         "ppo": CHEETAH_PPO,
-        "ppo_gru": dict(CHEETAH_PPO, update_epochs=8, learning_rate=3e-4, max_grad_norm=1.0,
-                        actor_hidden_sizes=[128, 128], critic_hidden_sizes=[256, 256, 256],
-                        gru_size=128),
+        "ppo_gru": dict(
+            CHEETAH_PPO,
+            update_epochs=8,
+            learning_rate=3e-4,
+            max_grad_norm=1.0,
+            actor_hidden_sizes=[128, 128],
+            critic_hidden_sizes=[256, 256, 256],
+            gru_size=128,
+        ),
         "sac": CHEETAH_OFF_POLICY,
         "simbav2": CHEETAH_OFF_POLICY,
         "bro": CHEETAH_OFF_POLICY,
@@ -55,8 +90,9 @@ SETTINGS: dict[str, dict[str, dict]] = {
     },
     "Go1JoystickFlatTerrain": {
         "ppo": GO1_PPO,
-        "ppo_gru": dict(GO1_PPO, actor_hidden_sizes=[256, 128], critic_hidden_sizes=[256, 128],
-                        gru_size=128),
+        "ppo_gru": dict(
+            GO1_PPO, actor_hidden_sizes=[256, 128], critic_hidden_sizes=[256, 128], gru_size=128
+        ),
         "sac": GO1_OFF_POLICY,
         "simbav2": GO1_OFF_POLICY,
         "bro": GO1_OFF_POLICY,
@@ -78,10 +114,18 @@ def run_job(env_id: str, algo: str, seed: int) -> None:
     out = job_dir(env_id, algo, seed)
     if out.exists():  # leftovers of an interrupted run would be appended to
         shutil.rmtree(out)
-    cfg = module.Config.from_dict({
-        **SETTINGS[env_id][algo], "env_id": env_id, "seed": seed, "num_evals": 20,
-        "num_logs": 50, "log_dir": str(out.parent), "run_name": out.name, "checkpoint": True,
-    })
+    cfg = module.Config.from_dict(
+        {
+            **SETTINGS[env_id][algo],
+            "env_id": env_id,
+            "seed": seed,
+            "num_evals": 20,
+            "num_logs": 50,
+            "log_dir": str(out.parent),
+            "run_name": out.name,
+            "checkpoint": True,
+        }
+    )
     module.train(cfg)
     (out / "DONE").touch()
 
@@ -105,8 +149,9 @@ def collect() -> dict:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--algos", nargs="*", default=None)
     ap.add_argument("--envs", nargs="*", default=list(SETTINGS))
     ap.add_argument("--seeds", nargs="*", type=int, default=[0, 1, 2, 3])
@@ -122,8 +167,13 @@ def main() -> None:
         collect()
         return
 
-    queue = [(e, a, s) for s in args.seeds for e in args.envs
-             for a in (args.algos or SETTINGS[e]) if not (job_dir(e, a, s) / "DONE").exists()]
+    queue = [
+        (e, a, s)
+        for s in args.seeds
+        for e in args.envs
+        for a in (args.algos or SETTINGS[e])
+        if not (job_dir(e, a, s) / "DONE").exists()
+    ]
     print(f"{len(queue)} jobs, {args.lanes} lane(s)")
     running: list[tuple[subprocess.Popen, tuple]] = []
     retries: dict[tuple, int] = {}
@@ -133,8 +183,14 @@ def main() -> None:
             log = job_dir(*job).with_suffix(".log")
             log.parent.mkdir(parents=True, exist_ok=True)
             cmd = [sys.executable, __file__, "--job", job[0], job[1], str(job[2])]
-            running.append((subprocess.Popen(cmd, stdout=open(log, "w"),
-                                             stderr=subprocess.STDOUT, cwd=ROOT), job))
+            running.append(
+                (
+                    subprocess.Popen(
+                        cmd, stdout=open(log, "w"), stderr=subprocess.STDOUT, cwd=ROOT
+                    ),
+                    job,
+                )
+            )
             print(f"started  {job}", flush=True)
         for proc, job in list(running):
             if proc.poll() is not None:

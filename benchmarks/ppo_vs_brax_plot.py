@@ -100,7 +100,15 @@ def plot_env(ax, env, data):
     if series:
         ax.legend(fontsize=5, frameon=True)
     else:
-        ax.text(0.5, 0.5, "No valid curves", transform=ax.transAxes, ha="center", va="center", fontsize=7)
+        ax.text(
+            0.5,
+            0.5,
+            "No valid curves",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=7,
+        )
     ax.grid(alpha=0.3)
 
 
@@ -140,7 +148,15 @@ def plot_runtime(ax, data):
 
     n_bars = len(series)
     if n_bars == 0:
-        ax.text(0.5, 0.5, "No runtime data", transform=ax.transAxes, ha="center", va="center", fontsize=7)
+        ax.text(
+            0.5,
+            0.5,
+            "No runtime data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=7,
+        )
         return
 
     offsets = np.linspace(-width * (n_bars - 1) / 2, width * (n_bars - 1) / 2, n_bars)

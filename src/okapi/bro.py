@@ -86,8 +86,7 @@ class BROConfig(TrainConfig):
 class BroNet(nnx.Module):
     """``Dense → LN → ReLU`` stem, ``num_blocks`` LayerNorm residual blocks, linear output."""
 
-    def __init__(self, in_size: int, width: int, num_blocks: int, out_size: int,
-                 *, rngs: nnx.Rngs):
+    def __init__(self, in_size: int, width: int, num_blocks: int, out_size: int, *, rngs: nnx.Rngs):
         init = nnx.initializers.orthogonal(math.sqrt(2.0))
         dense = lambda a, b: nnx.Linear(a, b, kernel_init=init, rngs=rngs)
         self.stem = dense(in_size, width)
@@ -105,8 +104,9 @@ class BroNet(nnx.Module):
         return self.out(h)
 
 
-def sample_tanh_normal(mean: jax.Array, log_std: jax.Array,
-                       key: jax.Array) -> tuple[jax.Array, jax.Array]:
+def sample_tanh_normal(
+    mean: jax.Array, log_std: jax.Array, key: jax.Array
+) -> tuple[jax.Array, jax.Array]:
     """Sample ``tanh(N(mean, std))`` and its log-density (summed over action dims)."""
     std = jnp.exp(log_std)
     u = mean + std * jax.random.normal(key, mean.shape)
@@ -119,8 +119,7 @@ class Actor(nnx.Module):
     """Tanh-Gaussian policy on a BroNet."""
 
     def __init__(self, obs_size: int, action_size: int, cfg: BROConfig, *, rngs: nnx.Rngs):
-        self.net = BroNet(obs_size, cfg.actor_width, cfg.actor_blocks, 2 * action_size,
-                          rngs=rngs)
+        self.net = BroNet(obs_size, cfg.actor_width, cfg.actor_blocks, 2 * action_size, rngs=rngs)
 
     def __call__(self, obs: jax.Array) -> tuple[jax.Array, jax.Array]:
         mean, log_std = jnp.split(self.net(obs), 2, axis=-1)
@@ -138,11 +137,18 @@ class Critic(nnx.Module):
     """Twin quantile critics; ``critic(obs, action)`` returns ``(2, batch, num_quantiles)``."""
 
     def __init__(self, obs_size: int, action_size: int, cfg: BROConfig, *, rngs: nnx.Rngs):
-        self.qs = nnx.List([
-            BroNet(obs_size + action_size, cfg.critic_width, cfg.critic_blocks,
-                   cfg.num_quantiles, rngs=rngs)
-            for _ in range(2)
-        ])
+        self.qs = nnx.List(
+            [
+                BroNet(
+                    obs_size + action_size,
+                    cfg.critic_width,
+                    cfg.critic_blocks,
+                    cfg.num_quantiles,
+                    rngs=rngs,
+                )
+                for _ in range(2)
+            ]
+        )
 
     def __call__(self, obs: jax.Array, action: jax.Array) -> jax.Array:
         x = jnp.concatenate([obs, action], -1)
@@ -160,8 +166,14 @@ class Temperature(nnx.Module):
 class Networks(nnx.Module):
     """All learned modules and their optimizers, split / merged as one state."""
 
-    def __init__(self, cfg: BROConfig, policy_obs_size: int, value_obs_size: int,
-                 action_size: int, key: jax.Array):
+    def __init__(
+        self,
+        cfg: BROConfig,
+        policy_obs_size: int,
+        value_obs_size: int,
+        action_size: int,
+        key: jax.Array,
+    ):
         rngs = nnx.Rngs(key)
         self.actor = Actor(policy_obs_size, action_size, cfg, rngs=rngs)
         self.explorer = Actor(policy_obs_size, action_size, cfg, rngs=rngs)
@@ -178,8 +190,9 @@ class Networks(nnx.Module):
         self.actor_opt = nnx.Optimizer(self.actor, tx(), wrt=nnx.Param)
         self.explorer_opt = nnx.Optimizer(self.explorer, tx(), wrt=nnx.Param)
         self.critic_opt = nnx.Optimizer(self.critic, tx(), wrt=nnx.Param)
-        self.temperature_opt = nnx.Optimizer(self.temperature, optax.adam(cfg.learning_rate),
-                                             wrt=nnx.Param)
+        self.temperature_opt = nnx.Optimizer(
+            self.temperature, optax.adam(cfg.learning_rate), wrt=nnx.Param
+        )
 
 
 def make_policy_apply(graphdef: nnx.GraphDef, policy_key: str):
@@ -207,23 +220,37 @@ def quantile_huber_loss(pred: jax.Array, target: jax.Array, kappa: float = 1.0) 
     return (jnp.abs(tau[None, :, None] - (u < 0)) * huber / kappa).sum(1).mean()
 
 
-def critic_loss(critic: Critic, actor: Actor, target_critic: Critic, alpha: jax.Array,
-                batch: dict[str, Any], pk: str, vk: str,
-                key: jax.Array) -> tuple[jax.Array, dict[str, jax.Array]]:
+def critic_loss(
+    critic: Critic,
+    actor: Actor,
+    target_critic: Critic,
+    alpha: jax.Array,
+    batch: dict[str, Any],
+    pk: str,
+    vk: str,
+    key: jax.Array,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Quantile regression towards the soft n-step target of the mean target critic."""
     next_action, next_log_prob = actor.sample(batch["next_obs"][pk], key)
     next_quantiles = target_critic(batch["next_obs"][vk], next_action).mean(0)  # (B, N)
     target = batch["reward"][:, None] + batch["discount"][:, None] * (
-        next_quantiles - alpha * next_log_prob[:, None])
+        next_quantiles - alpha * next_log_prob[:, None]
+    )
     target = jax.lax.stop_gradient(target)
     quantiles = critic(batch["obs"][vk], batch["action"])
     loss = quantile_huber_loss(quantiles[0], target) + quantile_huber_loss(quantiles[1], target)
     return loss, {"loss/critic": loss, "train/q_mean": quantiles.mean()}
 
 
-def actor_loss(actor: Actor, critic: Critic, alpha: jax.Array, batch: dict[str, Any],
-               pk: str, vk: str,
-               key: jax.Array) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
+def actor_loss(
+    actor: Actor,
+    critic: Critic,
+    alpha: jax.Array,
+    batch: dict[str, Any],
+    pk: str,
+    vk: str,
+    key: jax.Array,
+) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
     """Maximize the soft value under the mean of both critics (reduced pessimism)."""
     mean, log_std = actor(batch["obs"][pk])
     action, log_prob = sample_tanh_normal(mean, log_std, key)
@@ -231,54 +258,85 @@ def actor_loss(actor: Actor, critic: Critic, alpha: jax.Array, batch: dict[str, 
     return (alpha * log_prob - q).mean(), (log_prob, mean, log_std)
 
 
-def explorer_loss(explorer: Actor, critic: Critic, batch: dict[str, Any], mean: jax.Array,
-                  log_std: jax.Array, cfg: BROConfig, pk: str, vk: str,
-                  key: jax.Array) -> jax.Array:
+def explorer_loss(
+    explorer: Actor,
+    critic: Critic,
+    batch: dict[str, Any],
+    mean: jax.Array,
+    log_std: jax.Array,
+    cfg: BROConfig,
+    pk: str,
+    vk: str,
+    key: jax.Array,
+) -> jax.Array:
     """Maximize ``Q + optimism * |Q1 - Q2| / 2`` with a KL penalty to the conservative actor."""
     e_mean, e_log_std = explorer(batch["obs"][pk])
     action, _ = sample_tanh_normal(e_mean, e_log_std, key)
     q = critic(batch["obs"][vk], action).mean(-1)  # (2, B)
     optimistic_q = q.mean(0) + cfg.optimism * jnp.abs(q[0] - q[1]) / 2.0
-    kl = (log_std - e_log_std
-          + (jnp.exp(2 * e_log_std) + jnp.square(e_mean - mean)) / (2 * jnp.exp(2 * log_std))
-          - 0.5).sum(-1)
+    kl = (
+        log_std
+        - e_log_std
+        + (jnp.exp(2 * e_log_std) + jnp.square(e_mean - mean)) / (2 * jnp.exp(2 * log_std))
+        - 0.5
+    ).sum(-1)
     return (-optimistic_q + cfg.kl_coef * kl).mean()
 
 
-def temperature_loss(temperature: Temperature, log_prob: jax.Array,
-                     target_entropy: float) -> jax.Array:
+def temperature_loss(
+    temperature: Temperature, log_prob: jax.Array, target_entropy: float
+) -> jax.Array:
     return -(temperature.log_alpha[...] * jax.lax.stop_gradient(log_prob + target_entropy)).mean()
 
 
-def update(nets: Networks, batch: dict[str, Any], cfg: BROConfig, pk: str, vk: str,
-           target_entropy: float, key: jax.Array) -> dict[str, jax.Array]:
+def update(
+    nets: Networks,
+    batch: dict[str, Any],
+    cfg: BROConfig,
+    pk: str,
+    vk: str,
+    target_entropy: float,
+    key: jax.Array,
+) -> dict[str, jax.Array]:
     """One gradient step of critic, actor, explorer and temperature, then the target update."""
     critic_key, actor_key, explorer_key = jax.random.split(key, 3)
     alpha = nets.temperature()
     (_, metrics), grads = nnx.value_and_grad(critic_loss, has_aux=True)(
-        nets.critic, nets.actor, nets.target_critic, alpha, batch, pk, vk, critic_key)
+        nets.critic, nets.actor, nets.target_critic, alpha, batch, pk, vk, critic_key
+    )
     nets.critic_opt.update(nets.critic, grads)
 
     (loss, (log_prob, mean, log_std)), grads = nnx.value_and_grad(actor_loss, has_aux=True)(
-        nets.actor, nets.critic, alpha, batch, pk, vk, actor_key)
+        nets.actor, nets.critic, alpha, batch, pk, vk, actor_key
+    )
     nets.actor_opt.update(nets.actor, grads)
 
-    alpha_loss, grads = nnx.value_and_grad(temperature_loss)(nets.temperature, log_prob,
-                                                            target_entropy)
+    alpha_loss, grads = nnx.value_and_grad(temperature_loss)(
+        nets.temperature, log_prob, target_entropy
+    )
     nets.temperature_opt.update(nets.temperature, grads)
 
     if cfg.optimism > 0:
         mean, log_std = jax.lax.stop_gradient((mean, log_std))
         e_loss, grads = nnx.value_and_grad(explorer_loss)(
-            nets.explorer, nets.critic, batch, mean, log_std, cfg, pk, vk, explorer_key)
+            nets.explorer, nets.critic, batch, mean, log_std, cfg, pk, vk, explorer_key
+        )
         nets.explorer_opt.update(nets.explorer, grads)
         metrics["loss/explorer"] = e_loss
 
-    target = jax.tree.map(lambda t, s: (1.0 - cfg.tau) * t + cfg.tau * s,
-                          nnx.state(nets.target_critic), nnx.state(nets.critic))
+    target = jax.tree.map(
+        lambda t, s: (1.0 - cfg.tau) * t + cfg.tau * s,
+        nnx.state(nets.target_critic),
+        nnx.state(nets.critic),
+    )
     nnx.update(nets.target_critic, target)
-    return {**metrics, "loss/actor": loss, "loss/alpha": alpha_loss,
-            "train/alpha": nets.temperature(), "train/entropy": -log_prob.mean()}
+    return {
+        **metrics,
+        "loss/actor": loss,
+        "loss/alpha": alpha_loss,
+        "train/alpha": nets.temperature(),
+        "train/entropy": -log_prob.mean(),
+    }
 
 
 # ── Training ─────────────────────────────────────────────────────────────────
@@ -309,14 +367,19 @@ def train(
     actor_graphdef = nnx.split(nets.actor)[0]
     obs = envs.select_obs(s.env_state.obs, keys)
     obs_stats = envs.init_obs_stats(obs)
-    target_entropy = (-0.5 * s.action_size if cfg.target_entropy is None
-                      else cfg.target_entropy)
+    target_entropy = -0.5 * s.action_size if cfg.target_entropy is None else cfg.target_entropy
     if resume_from is not None:
         _, restored = checkpoint.load(resume_from, {"nets": nets_state, "obs_stats": obs_stats})
         nets_state, obs_stats = restored["nets"], restored["obs_stats"]
 
-    row = {"obs": obs, "action": jnp.zeros((n, s.action_size)), "reward": jnp.zeros(n),
-           "terminal": jnp.zeros(n), "last": jnp.zeros(n), "first": jnp.zeros(n)}
+    row = {
+        "obs": obs,
+        "action": jnp.zeros((n, s.action_size)),
+        "reward": jnp.zeros(n),
+        "terminal": jnp.zeros(n),
+        "last": jnp.zeros(n),
+        "first": jnp.zeros(n),
+    }
     buffer = replay.init(row, cfg.buffer_size // n)
 
     def collect(state: BROState, nets: Networks, random: bool) -> BROState:
@@ -330,21 +393,34 @@ def train(
             x = envs.normalize_obs(obs, state.obs_stats)[pk]
             behavior = nets.explorer if cfg.optimism > 0 else nets.actor
             action, _ = behavior.sample(x, action_key)
-        buffer = replay.add(state.buffer, {
-            "obs": obs, "action": action, "reward": env_state.reward * cfg.reward_scaling,
-            "terminal": envs.termination(env_state), "last": env_state.done,
-            "first": state.first})
+        buffer = replay.add(
+            state.buffer,
+            {
+                "obs": obs,
+                "action": action,
+                "reward": env_state.reward * cfg.reward_scaling,
+                "terminal": envs.termination(env_state),
+                "last": env_state.done,
+                "first": state.first,
+            },
+        )
         next_state = envs.step_or_reset(env, env_state, action, reset_key)
-        return state._replace(obs_stats=envs.update_obs_stats(state.obs_stats, obs),
-                              buffer=buffer, env_state=next_state, first=env_state.done, key=key)
+        return state._replace(
+            obs_stats=envs.update_obs_stats(state.obs_stats, obs),
+            buffer=buffer,
+            env_state=next_state,
+            first=env_state.done,
+            key=key,
+        )
 
     def learn(state: BROState, nets: Networks) -> tuple[BROState, dict[str, jax.Array]]:
         metrics = {}
         key = state.key
         for _ in range(cfg.updates_per_step):
             key, sample_key, update_key = jax.random.split(key, 3)
-            batch = replay.sample_transitions(state.buffer, sample_key, cfg.batch_size,
-                                              cfg.n_step, cfg.gamma)
+            batch = replay.sample_transitions(
+                state.buffer, sample_key, cfg.batch_size, cfg.n_step, cfg.gamma
+            )
             batch["obs"] = envs.normalize_obs(batch["obs"], state.obs_stats)
             batch["next_obs"] = envs.normalize_obs(batch["next_obs"], state.obs_stats)
             metrics = update(nets, batch, cfg, pk, vk, target_entropy, update_key)
@@ -361,8 +437,9 @@ def train(
 
         @jax.jit(donate_argnums=0)  # update the replay buffer in place
         def run(buffer: replay.ReplayBuffer, state: BROState):
-            state, metrics = jax.lax.scan(iteration, state._replace(buffer=buffer), None,
-                                          num_iterations)
+            state, metrics = jax.lax.scan(
+                iteration, state._replace(buffer=buffer), None, num_iterations
+            )
             return state.buffer, state._replace(buffer=None), jax.tree.map(lambda x: x[-1], metrics)
 
         def train_fn(state: BROState) -> tuple[BROState, dict[str, jax.Array]]:
@@ -377,15 +454,25 @@ def train(
     iterations = max(1, min(cfg.total_timesteps // (cfg.num_logs * n), 1000))
 
     def policy_params(state: BROState) -> dict[str, Any]:
-        return {"actor": nnx.state(nnx.merge(graphdef, state.nets).actor),
-                "obs_stats": state.obs_stats}
+        return {
+            "actor": nnx.state(nnx.merge(graphdef, state.nets).actor),
+            "obs_stats": state.obs_stats,
+        }
 
     apply = make_policy_apply(actor_graphdef, pk)
     evaluate = envs.make_evaluator(cfg, s.eval_env, apply, lambda n: ())
     state, _ = train_loop(
-        cfg, s.logger, state, make_train_fn(iterations, random=False), iterations * n,
-        evaluate, policy_params, lambda st: {"nets": st.nets, "obs_stats": st.obs_stats},
-        jax.random.key(cfg.seed + 1), warmup_iterations * n)
+        cfg,
+        s.logger,
+        state,
+        make_train_fn(iterations, random=False),
+        iterations * n,
+        evaluate,
+        policy_params,
+        lambda st: {"nets": st.nets, "obs_stats": st.obs_stats},
+        jax.random.key(cfg.seed + 1),
+        warmup_iterations * n,
+    )
     s.logger.close()
     return Policy(NAME, policy_params(state), apply)
 
