@@ -4,28 +4,49 @@ build-backend = "hatchling.build"
 
 [project]
 name = "okapi"
-version = "0.1.0"
-description = "Reinforcement Learning with JAX - PPO implementations for MuJoCo"
+version = "0.2.0"
+description = "Single-file deep reinforcement learning algorithms in JAX / Flax NNX for MuJoCo Playground"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "brax>=0.14.2",
-    "distrax>=0.1.7",
     "flax>=0.12.0",
-    "gymnasium[box2d,mujoco]>=1.2.1",
     "hydra-core>=1.3.2",
+    "imageio>=2.37.0",
     "jax[cuda]>=0.7.2",
     "matplotlib>=3.10.8",
+    "mediapy>=1.2.0",
     "mujoco>=3.7.0",
     "optax>=0.2.6",
     "orbax-checkpoint>=0.11.25",
     "playground>=0.2.0",
-    "ruff>=0.14.0",
+    "pyyaml>=6.0",
     "scienceplots>=2.2.1",
-    "tqdm>=4.67.1",
     "wandb>=0.22.2",
     "warp-lang>=1.9.1",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.14.0",
+]
+docs = [
+    "furo>=2024.8.6",
+    "myst-parser>=4.0.0",
+    "sphinx>=8.1.0",
+    "sphinx-copybutton>=0.5.2",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/okapi"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = ["E731"]  # short lambdas are used for small closures
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["E402"]  # environment variables / warning filters precede imports
+"*.ipynb" = ["E402"]  # notebooks set environment variables before imports

@@ -1,0 +1,34 @@
+# @package _global_
+# DreamerV3 (okapi.dreamerv3.DreamerV3Config): world model + actor-critic in imagination.
+algo: dreamerv3
+num_envs: 32
+total_timesteps: 2_000_000
+buffer_size: 1_000_000
+batch_size: 16              # sequences per update
+seq_len: 64
+updates_per_step: 1
+learning_starts: 8192
+deter: 512
+stoch: 32
+classes: 32
+hidden: 512
+num_layers: 2
+unimix: 0.01
+free_nats: 1.0
+dyn_scale: 0.5
+rep_scale: 0.1
+model_lr: 1.0e-4
+actor_lr: 3.0e-5
+critic_lr: 3.0e-5
+model_grad_clip: 1000.0
+ac_grad_clip: 100.0
+horizon: 15
+gamma: 0.997
+gae_lambda: 0.95
+ent_coef: 3.0e-4
+num_bins: 255
+slow_critic_rate: 0.02
+slow_critic_reg: 1.0
+return_norm_decay: 0.99
+min_std: 0.1
+max_std: 1.0

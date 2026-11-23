@@ -1,0 +1,39 @@
+# @package _global_
+# TD-MPC2 (okapi.tdmpc2.TDMPC2Config): latent world model + MPPI planning.
+algo: tdmpc2
+num_envs: 64
+total_timesteps: 1_000_000
+buffer_size: 1_000_000
+batch_size: 256             # sequences per update
+horizon: 3                  # model rollout / planning horizon
+updates_per_step: 1
+learning_starts: 8192
+learning_rate: 3.0e-4
+encoder_lr_scale: 0.3
+grad_clip: 20.0
+gamma: 0.99
+tau: 0.01
+rho: 0.5                    # temporal loss weighting over the horizon
+consistency_coef: 20.0
+reward_coef: 0.1
+value_coef: 0.1
+entropy_coef: 1.0e-4
+scale_rate: 0.01
+latent_dim: 512
+hidden: 512
+encoder_dim: 256
+num_q: 5
+simnorm_dim: 8
+num_bins: 101
+v_min: -10.0
+v_max: 10.0
+log_std_min: -10.0
+log_std_max: 2.0
+mpc: true                   # act by planning (false: policy prior)
+iterations: 6               # MPPI
+num_samples: 512
+num_elites: 64
+num_pi_trajs: 24
+min_std: 0.05
+max_std: 2.0
+temperature: 0.5

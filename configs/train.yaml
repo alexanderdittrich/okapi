@@ -1,0 +1,40 @@
+# uv run scripts/train.py algo=<ppo|ppo_gru|sac|simbav2|bro|dreamerv3|tdmpc2> env_id=<Playground env> [key=value ...]
+#
+# Options shared by all algorithms (okapi.common.config.TrainConfig). Algorithm
+# hyperparameters live in configs/algo/<name>.yaml and override the values below.
+defaults:
+  - _self_
+  - algo: ppo
+
+# ── Environment ───────────────────────────────────────────────────────────────
+env_id: CheetahRun
+impl: null                  # physics backend: jax (MJX) | warp | null (env default)
+episode_length: 1000
+action_repeat: 1
+policy_obs_key: state       # observation entry of the policy (dict observations)
+value_obs_key: state        # observation entry of the critic, e.g. privileged_state
+domain_randomization: false
+full_reset: false           # auto-reset re-runs env.reset (per-episode state in info)
+env_overrides: {}           # extra config_overrides for registry.load
+
+# ── Budget ────────────────────────────────────────────────────────────────────
+seed: 0
+
+# ── Evaluation, logging, checkpointing ────────────────────────────────────────
+num_evals: 20               # evaluations over training (+ one at step 0)
+num_eval_envs: 128          # episodes per evaluation
+num_logs: 100               # training-metric logs over training
+log_dir: runs               # run directories: <log_dir>/<run_name>
+run_name: null              # default: <env>-<algo>-<time>-<id>
+use_wandb: false
+wandb_project: okapi
+checkpoint: false           # save a checkpoint at every evaluation
+verbose: true
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job_logging:
+    root:
+      level: WARNING

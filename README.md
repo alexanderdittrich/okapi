@@ -1,80 +1,109 @@
-# okapi: Deep Reinforcement Learning with JAX Flax NNX and MuJoCo Playground
-<a><img src="docs/okapi.png" width="240" align="right"/></a>
+# okapi: Deep RL with JAX, Flax NNX and MuJoCo Playground
+<a><img src="docs/_static/okapi.png" width="200" align="right"/></a>
 
-This repository provides high-performing implementation of PPO for JAX Flax NNX and MuJoCo Playground. The implementation is a partial adaptation of Brax PPO. However, unlike `Brax` it uses simple single-file implementations and the more readable Flax NNX API instead of Flax Linen.
+Single-file implementations of deep reinforcement learning algorithms in JAX and
+[Flax NNX](https://flax.readthedocs.io/en/latest/nnx_basics.html) for
+[MuJoCo Playground](https://playground.mujoco.org/). Physics
+([MJX](https://mujoco.readthedocs.io/en/stable/mjx.html) or
+[MuJoCo Warp](https://mujoco.readthedocs.io/en/stable/mjwarp/index.html)), inference,
+replay and gradient updates all run on the GPU.
 
-**Features:**
-- Single-file implementation of DRL baselines with Flax NNX.
-- Physics simulation, neural network inference and gradient computation all runs on GPU with `jit`-acceleration.
-- Compatible with MuJoCo Playground environments - supporting [MuJoCo MJX](https://mujoco.readthedocs.io/en/stable/mjx.html) and [Warp](https://mujoco.readthedocs.io/en/stable/mjwarp/index.html).
-- Checkpointing with [orbax-checkpoint](https://orbax.readthedocs.io/)
-- Config management with [hydra](https://hydra.cc)
-- Experiment logging via [wandb](https://wandb.ai/)
-- Dependency management with [uv](https://docs.astral.sh/uv/) 
+📖 **Documentation:** [okapi.readthedocs.io](https://okapi.readthedocs.io)
 
-**Disclaimer 1:** This repository is not actively developed framework and will not provide any further support or documentation. It is intended for hobbyists and as a look-up for the usage of Flax NNX in DRL. For reliable and widely-validated and tested results, we recommend more mature frameworks e.g. [stable-baselines3](https://github.com/DLR-RM/stable-baselines3), [Brax](https://github.com/google/brax), [CleanRL](https://github.com/vwxyzjn/cleanrl) and [RSL-RL](https://github.com/leggedrobotics/rsl_rl). Nevertheless, we added some benchmarking and fun training examples to validate the functionality of the implemented algorithms.
+| Algorithm | File | Paper |
+|---|---|---|
+| PPO | [`ppo.py`](src/okapi/ppo.py) | [Schulman et al., 2017](https://arxiv.org/abs/1707.06347) |
+| PPO-GRU | [`ppo_gru.py`](src/okapi/ppo_gru.py) | PPO with recurrent actor and critic |
+| SAC | [`sac.py`](src/okapi/sac.py) | [Haarnoja et al., 2018](https://arxiv.org/abs/1812.05905) |
+| SimbaV2 | [`simbav2.py`](src/okapi/simbav2.py) | [Lee et al., 2025](https://arxiv.org/abs/2502.15280) |
+| BRO | [`bro.py`](src/okapi/bro.py) | [Nauman et al., 2024](https://arxiv.org/abs/2405.16158) |
+| DreamerV3 | [`dreamerv3.py`](src/okapi/dreamerv3.py) | [Hafner et al., 2023](https://arxiv.org/abs/2301.04104) |
+| TD-MPC2 | [`tdmpc2.py`](src/okapi/tdmpc2.py) | [Hansen et al., 2024](https://arxiv.org/abs/2310.16828) |
 
-**Disclaimer 2:** Unlike `Brax` this implementation here vectorize with `vmap` instead of `pmap` and do not support multi-GPU usage. Which might be not required anyway for most users.
-
-**Disclaimer 3:** The added `SAC`-implementations are not tested or benchmarked and mostly prompted.
-
-Nevertheless, feel free to submit issues and PR. While we cannot promise to integrate them, it might be helpful for other users.
-
+Every algorithm has the same interface (`Config`, `train(...) -> Policy`,
+`load_policy(run_dir)`) and the same option names. Shared plumbing (environments, replay
+buffer, logging, checkpoints, evaluation) lives in [`okapi/common`](src/okapi/common).
 
 ## Getting started
-Setup training environment with `uv`.
+
 ```bash
-git clone git@github.com:alexanderdittrich/rlx.git && cd rlx 
+git clone https://github.com/alexanderdittrich/okapi.git && cd okapi
 uv sync
+uv run scripts/train.py algo=sac env_id=CheetahRun
 ```
 
-Run training:
+The same from Python: every algorithm module has a config class and a `train` function.
+
+```python
+from okapi.sac import SACConfig, train
+
+cfg = SACConfig(env_id="CheetahRun", total_timesteps=2_000_000)
+policy = train(cfg)
+```
+
+The returned policy maps environment observations to actions:
+
+```python
+import jax
+from mujoco_playground import registry
+
+env = registry.load("CheetahRun")
+state = env.reset(jax.random.key(0))
+action, _ = policy(state.obs)
+state = env.step(state, action)
+```
+
+Look at a trained policy (each run lives in `runs/`; train with `checkpoint=true`):
+
 ```bash
-uv run scripts/playground_ppo_train.py env_id=Go1JoystickWalk num_train_steps=200000000
+uv run scripts/view.py runs/<run_dir>                     # interactive viewer
+uv run scripts/render.py runs/<run_dir> --output out.mp4  # video
 ```
 
 ## Benchmarks
-For benchmarking, we use the default parameters by `MuJoCo Playground` for dm_control tasks and locomotion tasks. We run each task for 10 different random seeds on a `NVIDIA 4080 Super`-GPU.
 
-### Performance comparison
+Four seeds per algorithm on an RTX 4080 Super. See the
+[benchmark page](https://okapi.readthedocs.io/en/latest/benchmarks.html) for settings and
+throughput.
 
-<img src="docs/benchmark_performance.png" width="850"/>
+<img src="docs/_static/benchmark_performance.png" width="850"/>
 
-### Training time
+| Algorithm | CheetahRun | Go1 joystick | Throughput (Cheetah) |
+|---|---|---|---|
+| PPO | 763 ± 87 (60M) | 30.7 ± 0.1 (200M) | 662k steps/s |
+| PPO-GRU | 701 ± 144 (60M) | 27.2 ± 3.3 (200M) | 298k steps/s |
+| SAC | 836 ± 20 (5M) | 13.5 ± 0.6 (10M) | 53k steps/s |
+| SimbaV2 | 874 ± 59 (5M) | **30.4 ± 0.2** (10M) | 6.1k steps/s |
+| BRO | **930 ± 2** (5M) | 7.3 ± 0.8 (10M) | 11k steps/s |
+| DreamerV3 | 537 ± 57 (1M) | 2.6 ± 1.5 (1M) | 0.6k steps/s |
 
-<img src="docs/benchmark_runtime.png" width="850"/>
+## Showcase tasks
 
+Football-inspired tasks adapted from [goncalog/ai-robotics](https://github.com/goncalog/ai-robotics)
+and a quadruped okapi, in [`examples/`](examples).
 
+### Okapi locomotion
+<img src="docs/_static/okapi_locomotion.gif" width="480"/>
 
-## Showcase Tasks
-[Goncalog](https://github.com/goncalog/ai-robotics) presented very nice football-inspired tasks. We transfered the tasks to the `MuJoCo Playground` API and added them in the `/examples`-folder and as a showcase for the functionality of the training algorithm beyond benchmarks.
+### Penalty shoot-out: striker vs. keeper
+<img src="docs/_static/penalties.gif" width="480"/>
 
-### Okapi Locomote
-<a><img src="docs/okapi_locomotion.gif" width="480"/></a>
+### Foot tricks with a humanoid
+<img src="docs/_static/foot_tricks_2.gif" width="480"/>
 
-### Foot tricks with Humanoid
-<a><img src="docs/foot_tricks_2.gif" width="480"/></a>
+### Foot tricks with the OP3 robot
+<img src="docs/_static/robot_tricks.gif" width="480"/>
 
-### Foot tricks with OP3 Robot
-<a><img src="docs/robot_tricks.gif" width="480"/></a>
+### Head tricks with a humanoid
+<img src="docs/_static/head_tricks.gif" width="480"/>
 
-### Head tricks with Humanoid
-<a><img src="docs/head_tricks.gif" width="480"/></a>
+## Notes
 
-### Curriculum learning with Keeper and Striker Humanoids
-<a><img src="docs/penalties.gif" width="480"/></a>
+okapi is a compact research and hobby codebase, not a heavily validated framework.
+For production use, consider [Brax](https://github.com/google/brax),
+[CleanRL](https://github.com/vwxyzjn/cleanrl), [RSL-RL](https://github.com/leggedrobotics/rsl_rl)
+or [stable-baselines3](https://github.com/DLR-RM/stable-baselines3). okapi vectorizes with
+`vmap` on a single GPU. Issues and PRs are welcome.
 
-
-## Passive Viewer - Visualization
-`Brax` and `MuJoCo Playground` do not support any interactive rendering out of the box. Usually rendering is done via notebooks and mediapy video generation, which can be tedious to use. [rscope](https://github.com/Andrew-Luo1/rscope) is a great tool which allows interactive visualization even remotely via `ssh`. We modified `rscope` to a single-script post-training checkpoint visualizer compatible with the checkpointing here. The visualizer runs on CPU and can be executed during on-going training.
-
-```bash
-uv run scripts/playground_ckpt_view.py run_dir="./checkpoints/<CKPT_DIR_PATH>"
-```
-
-You can choose how many times each checkpoint should be evaluated and each checkpoint and evaluation rollout can be navigated directly in the visualizer via the arrow keys (←→↑↓).
-
-
-https://github.com/user-attachments/assets/e61a383b-47d3-4516-8960-66d3689c7f9a
-
-
+PPO is adapted from [Brax](https://github.com/google/brax) (Apache 2.0). The checkpoint
+viewer is adapted from [rscope](https://github.com/Andrew-Luo1/rscope) (MIT).
