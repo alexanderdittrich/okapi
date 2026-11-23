@@ -212,3 +212,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# okapi run directories
+runs/
+.claude/
+MUJOCO_LOG.TXT

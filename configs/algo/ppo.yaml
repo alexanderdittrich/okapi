@@ -1,0 +1,22 @@
+# @package _global_
+# PPO (okapi.ppo.PPOConfig). Defaults: MuJoCo Playground locomotion settings.
+algo: ppo
+num_envs: 8192
+total_timesteps: 200_000_000
+num_steps: 20               # rollout length per environment
+num_rollout_rounds: 1       # rollouts collected before each update pass
+num_minibatches: 32
+update_epochs: 4
+learning_rate: 3.0e-4
+gamma: 0.97
+gae_lambda: 0.95
+clip_coef: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+max_grad_norm: 1.0
+reward_scaling: 1.0
+norm_adv: true
+actor_hidden_sizes: [512, 256, 128]
+critic_hidden_sizes: [512, 256, 128]
+activation: swish           # tanh | relu | swish | silu | elu | gelu
+warmup_stats: true          # prime observation statistics before training

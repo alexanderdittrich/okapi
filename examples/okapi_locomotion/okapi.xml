@@ -1,0 +1,218 @@
+<mujoco model="okapi">
+  <!-- A 12-DoF okapi. Physics: the "phys" capsules and foot spheres (collision and mass).
+       Everything else is decoration: class "vis" geoms have no mass and no collision.
+       Rainforest scenery is added in Python (scenery.py). -->
+
+  <compiler angle="radian" autolimits="true" />
+
+  <option timestep="0.004" integrator="RK4" iterations="1" ls_iterations="5" gravity="0 0 -9.81"/>
+
+  <size nconmax="100" njmax="500"/>
+
+  <visual>
+    <map znear="0.005" zfar="80" shadowclip="12"/>
+    <rgba haze="0.62 0.74 0.66 1"/>
+    <headlight ambient="0.32 0.33 0.30" diffuse="0.25 0.25 0.22" specular="0 0 0"/>
+    <global offwidth="1280" offheight="720" elevation="-15" azimuth="130"/>
+    <quality shadowsize="8192" offsamples="8"/>
+  </visual>
+
+  <statistic center="0 0 0.4" extent="1.6"/>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1=".36 .58 .82" rgb2=".86 .92 .90"
+             width="512" height="512"/>
+    <!-- mossy forest floor -->
+    <texture name="ground" type="2d" builtin="flat" mark="random" random="0.18"
+             rgb1=".25 .34 .14" markrgb=".36 .30 .16" width="128" height="128"/>
+    <material name="ground" texture="ground" texrepeat="0.6 0.6" texuniform="true"
+              specular="0" shininess="0" reflectance="0"/>
+
+    <material name="coat"      rgba="0.30 0.12 0.06 1" specular="0.15" shininess="0.3"/>
+    <material name="coat_dark" rgba="0.15 0.07 0.04 1" specular="0.1" shininess="0.3"/>
+    <material name="cream"     rgba="0.92 0.88 0.80 1" specular="0.1" shininess="0.3"/>
+    <material name="face"      rgba="0.78 0.70 0.58 1" specular="0.1" shininess="0.3"/>
+    <material name="muzzle"    rgba="0.10 0.07 0.06 1" specular="0.4" shininess="0.6"/>
+    <material name="hoof"      rgba="0.07 0.05 0.04 1" specular="0.3" shininess="0.5"/>
+    <material name="eye"       rgba="0.03 0.02 0.02 1" specular="1" shininess="1"/>
+  </asset>
+
+  <default>
+    <geom condim="3" friction="0.8 0.1 0.1" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+    <joint type="hinge" limited="true" damping="1.0" armature="0.01" frictionloss="0.01"/>
+    <default class="vis">
+      <geom contype="0" conaffinity="0" mass="0" material="coat"/>
+      <default class="band">  <!-- a short ring around a leg -->
+        <geom type="cylinder"/>
+      </default>
+    </default>
+    <default class="phys">
+      <geom contype="1" conaffinity="1" material="coat"/>
+    </default>
+    <default class="foot">
+      <geom type="sphere" size="0.028" contype="1" conaffinity="1" material="hoof"
+            friction="1.4 0.05 0.05" solref="0.01 1"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light name="sun" directional="true" castshadow="true" diffuse=".95 .88 .72"
+           specular=".4 .38 .3" pos="5 -4 14" dir="-0.25 0.2 -1"/>
+    <light name="fill" directional="true" castshadow="false" diffuse=".22 .28 .30"
+           specular="0 0 0" pos="-5 5 6" dir="0.5 -0.5 -1"/>
+    <geom name="floor" size="0 0 .5" type="plane" material="ground" contype="1" conaffinity="1"/>
+
+    <!-- Free joint at z = 0.5; straight legs reach the floor at z ≈ 0.014. -->
+    <body name="torso" pos="0 0 0.5">
+      <camera name="track" pos="0.846 -1.3 0.416" xyaxes="0.866 0.500 0.000 -0.171 0.296 0.940" mode="trackcom"/>
+      <camera name="cinematic" pos="0.68 -1.43 0.19" xyaxes="0.904 0.428 0 -0.060 0.128 0.990" mode="trackcom"/>
+      <camera name="top" pos="-1.5 0 1.5" xyaxes="0 -1 0 0.7 0 0.7" mode="trackcom"/>
+      <camera name="side" pos="0 -2 .8" xyaxes="1 0 0 0 1 2" mode="trackcom"/>
+      <camera name="back" pos="-1.5 0 .5" xyaxes="0 -1 0 1 0 3" mode="trackcom"/>
+
+      <freejoint name="root"/>
+      <site name="imu" pos="0 0 0" size="0.005" rgba="0 0 1 0"/>
+
+      <geom name="torso" type="capsule" size="0.082" fromto="-0.22 0 0  0.22 0 0" class="phys"/>
+
+      <!-- neck and head -->
+      <geom name="neck" type="capsule" size="0.045" fromto="0.20 0 0.04  0.30 0 0.26" class="vis"/>
+      <geom name="head" type="ellipsoid" size="0.070 0.045 0.048" pos="0.33 0 0.28" euler="0 0.45 0" class="vis"/>
+      <geom name="snout" type="ellipsoid" size="0.048 0.034 0.032" pos="0.39 0 0.25" euler="0 0.45 0" class="vis" material="face"/>
+      <geom name="nose" type="sphere" size="0.018" pos="0.428 0 0.235" class="vis" material="muzzle"/>
+      <geom name="eye_l" type="sphere" size="0.010" pos="0.345  0.040 0.295" class="vis" material="eye"/>
+      <geom name="eye_r" type="sphere" size="0.010" pos="0.345 -0.040 0.295" class="vis" material="eye"/>
+      <geom name="ear_l" type="ellipsoid" size="0.010 0.030 0.055" pos="0.29  0.065 0.33" euler="-0.95 -0.25 0.35" class="vis"/>
+      <geom name="ear_r" type="ellipsoid" size="0.010 0.030 0.055" pos="0.29 -0.065 0.33" euler="0.95 -0.25 -0.35" class="vis"/>
+      <geom name="ossicone_l" type="capsule" size="0.008" fromto="0.31  0.02 0.32  0.30  0.025 0.355" class="vis"/>
+      <geom name="ossicone_r" type="capsule" size="0.008" fromto="0.31 -0.02 0.32  0.30 -0.025 0.355" class="vis"/>
+      <geom name="tail" type="capsule" size="0.012" fromto="-0.28 0 0.04  -0.33 0 -0.13" class="vis"/>
+
+      <!-- Legs: 3 DoF each (hip abduction, hip flexion, knee). Striped rear thighs,
+           white lower legs. -->
+
+      <body name="thigh_FL" pos="0.185  0.100 -0.040">
+        <joint name="hip_ab_FL" axis="1 0 0" range="-0.50 0.50"/>
+        <joint name="hip_fl_FL" axis="0 1 0" range="-1.05 0.80"/>
+        <geom name="thigh_FL" type="capsule" size="0.042" fromto="0 0 0  0 0 -0.200" class="phys"/>
+        <body name="shin_FL" pos="0 0 -0.200">
+          <joint name="knee_FL" axis="0 1 0" range="-2.60 0.05"/>
+          <geom name="shin_FL" type="capsule" size="0.025" fromto="0 0 0  0 0 -0.200" class="phys" material="cream"/>
+          <geom class="band" size="0.0255 0.014" pos="0 0 -0.180" material="coat_dark"/>
+          <body name="foot_FL" pos="0 0 -0.214">
+            <site name="foot_FL" pos="0 0 0" size="0.005" rgba="0 1 0 0"/>
+            <geom name="foot_FL" class="foot"/>
+          </body>
+        </body>
+      </body>
+
+      <body name="thigh_FR" pos="0.185 -0.100 -0.040">
+        <joint name="hip_ab_FR" axis="1 0 0" range="-0.50 0.50"/>
+        <joint name="hip_fl_FR" axis="0 1 0" range="-1.05 0.80"/>
+        <geom name="thigh_FR" type="capsule" size="0.042" fromto="0 0 0  0 0 -0.200" class="phys"/>
+        <body name="shin_FR" pos="0 0 -0.200">
+          <joint name="knee_FR" axis="0 1 0" range="-2.60 0.05"/>
+          <geom name="shin_FR" type="capsule" size="0.025" fromto="0 0 0  0 0 -0.200" class="phys" material="cream"/>
+          <geom class="band" size="0.0255 0.014" pos="0 0 -0.180" material="coat_dark"/>
+          <body name="foot_FR" pos="0 0 -0.214">
+            <site name="foot_FR" pos="0 0 0" size="0.005" rgba="0 1 0 0"/>
+            <geom name="foot_FR" class="foot"/>
+          </body>
+        </body>
+      </body>
+
+      <body name="thigh_RL" pos="-0.185  0.100 -0.040">
+        <joint name="hip_ab_RL" axis="1 0 0" range="-0.50 0.50"/>
+        <joint name="hip_fl_RL" axis="0 1 0" range="-0.80 1.05"/>
+        <geom name="thigh_RL" type="capsule" size="0.046" fromto="0 0 0  0 0 -0.200" class="phys"/>
+        <geom class="band" size="0.0465 0.010" pos="0 0 -0.040" material="cream"/>
+        <geom class="band" size="0.0465 0.010" pos="0 0 -0.075" material="cream"/>
+        <geom class="band" size="0.0465 0.009" pos="0 0 -0.110" material="cream"/>
+        <geom class="band" size="0.0465 0.008" pos="0 0 -0.143" material="cream"/>
+        <geom class="band" size="0.0465 0.007" pos="0 0 -0.173" material="cream"/>
+        <body name="shin_RL" pos="0 0 -0.200">
+          <joint name="knee_RL" axis="0 1 0" range="-2.60 0.05"/>
+          <geom name="shin_RL" type="capsule" size="0.028" fromto="0 0 0  0 0 -0.200" class="phys" material="cream"/>
+          <geom class="band" size="0.0285 0.014" pos="0 0 -0.180" material="coat_dark"/>
+          <body name="foot_RL" pos="0 0 -0.214">
+            <site name="foot_RL" pos="0 0 0" size="0.005" rgba="0 1 0 0"/>
+            <geom name="foot_RL" class="foot"/>
+          </body>
+        </body>
+      </body>
+
+      <body name="thigh_RR" pos="-0.185 -0.100 -0.040">
+        <joint name="hip_ab_RR" axis="1 0 0" range="-0.50 0.50"/>
+        <joint name="hip_fl_RR" axis="0 1 0" range="-0.80 1.05"/>
+        <geom name="thigh_RR" type="capsule" size="0.046" fromto="0 0 0  0 0 -0.200" class="phys"/>
+        <geom class="band" size="0.0465 0.010" pos="0 0 -0.040" material="cream"/>
+        <geom class="band" size="0.0465 0.010" pos="0 0 -0.075" material="cream"/>
+        <geom class="band" size="0.0465 0.009" pos="0 0 -0.110" material="cream"/>
+        <geom class="band" size="0.0465 0.008" pos="0 0 -0.143" material="cream"/>
+        <geom class="band" size="0.0465 0.007" pos="0 0 -0.173" material="cream"/>
+        <body name="shin_RR" pos="0 0 -0.200">
+          <joint name="knee_RR" axis="0 1 0" range="-2.60 0.05"/>
+          <geom name="shin_RR" type="capsule" size="0.028" fromto="0 0 0  0 0 -0.200" class="phys" material="cream"/>
+          <geom class="band" size="0.0285 0.014" pos="0 0 -0.180" material="coat_dark"/>
+          <body name="foot_RR" pos="0 0 -0.214">
+            <site name="foot_RR" pos="0 0 0" size="0.005" rgba="0 1 0 0"/>
+            <geom name="foot_RR" class="foot"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- MJX excludes parent-grandparent pairs but not parent-child pairs. -->
+  <contact>
+    <exclude body1="torso"    body2="thigh_FL"/>
+    <exclude body1="torso"    body2="thigh_FR"/>
+    <exclude body1="torso"    body2="thigh_RL"/>
+    <exclude body1="torso"    body2="thigh_RR"/>
+    <exclude body1="thigh_FL" body2="shin_FL"/>
+    <exclude body1="thigh_FR" body2="shin_FR"/>
+    <exclude body1="thigh_RL" body2="shin_RL"/>
+    <exclude body1="thigh_RR" body2="shin_RR"/>
+    <exclude body1="shin_FL"  body2="foot_FL"/>
+    <exclude body1="shin_FR"  body2="foot_FR"/>
+    <exclude body1="shin_RL"  body2="foot_RL"/>
+    <exclude body1="shin_RR"  body2="foot_RR"/>
+  </contact>
+
+  <!-- Position actuators; joint damping (Kd) is set in env.py. -->
+  <actuator>
+    <position name="hip_ab_FL" joint="hip_ab_FL" kp="40"  ctrlrange="-0.50 0.50"/>
+    <position name="hip_fl_FL" joint="hip_fl_FL" kp="100" ctrlrange="-1.05 0.80"/>
+    <position name="knee_FL"   joint="knee_FL"   kp="100" ctrlrange="-2.60 0.05"/>
+    <position name="hip_ab_FR" joint="hip_ab_FR" kp="40"  ctrlrange="-0.50 0.50"/>
+    <position name="hip_fl_FR" joint="hip_fl_FR" kp="100" ctrlrange="-1.05 0.80"/>
+    <position name="knee_FR"   joint="knee_FR"   kp="100" ctrlrange="-2.60 0.05"/>
+    <position name="hip_ab_RL" joint="hip_ab_RL" kp="40"  ctrlrange="-0.50 0.50"/>
+    <position name="hip_fl_RL" joint="hip_fl_RL" kp="100" ctrlrange="-0.80 1.05"/>
+    <position name="knee_RL"   joint="knee_RL"   kp="100" ctrlrange="-2.60 0.05"/>
+    <position name="hip_ab_RR" joint="hip_ab_RR" kp="40"  ctrlrange="-0.50 0.50"/>
+    <position name="hip_fl_RR" joint="hip_fl_RR" kp="100" ctrlrange="-0.80 1.05"/>
+    <position name="knee_RR"   joint="knee_RR"   kp="100" ctrlrange="-2.60 0.05"/>
+  </actuator>
+
+  <!-- Velocities are in the world frame; env.py rotates them into the body frame. -->
+  <sensor>
+    <framelinvel name="torso_linvel" objtype="body" objname="torso"/>
+    <frameangvel name="torso_angvel" objtype="body" objname="torso"/>
+    <framelinvel name="foot_FL_vel"  objtype="site" objname="foot_FL"/>
+    <framelinvel name="foot_FR_vel"  objtype="site" objname="foot_FR"/>
+    <framelinvel name="foot_RL_vel"  objtype="site" objname="foot_RL"/>
+    <framelinvel name="foot_RR_vel"  objtype="site" objname="foot_RR"/>
+    <contact name="foot_FR_floor_found" geom1="foot_FR" geom2="floor" reduce="mindist" num="1" data="found"/>
+    <contact name="foot_FL_floor_found" geom1="foot_FL" geom2="floor" reduce="mindist" num="1" data="found"/>
+    <contact name="foot_RL_floor_found" geom1="foot_RL" geom2="floor" reduce="mindist" num="1" data="found"/>
+    <contact name="foot_RR_floor_found" geom1="foot_RR" geom2="floor" reduce="mindist" num="1" data="found"/>
+  </sensor>
+
+  <!-- qpos: root (x y z qw qx qy qz), then hip_ab hip_fl knee for FL FR RL RR. -->
+  <keyframe>
+    <key name="stand"
+         qpos="0 0 0.48  1 0 0 0  0 0 -0.20  0 0 -0.20  0 0 -0.20  0 0 -0.20"
+         ctrl="0 0 -0.20  0 0 -0.20  0 0 -0.20  0 0 -0.20"/>
+  </keyframe>
+</mujoco>

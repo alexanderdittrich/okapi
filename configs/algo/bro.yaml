@@ -1,0 +1,25 @@
+# @package _global_
+# BRO (okapi.bro.BROConfig): BroNet, quantile critics, weight decay, optimistic exploration.
+algo: bro
+num_envs: 128
+total_timesteps: 10_000_000
+buffer_size: 4_194_304
+batch_size: 512
+updates_per_step: 8
+learning_starts: 8192
+learning_rate: 3.0e-4
+weight_decay: 1.0e-4
+max_grad_norm: null
+gamma: 0.99
+n_step: 1
+tau: 0.005
+init_alpha: 0.1
+target_entropy: null
+reward_scaling: 1.0
+critic_width: 512
+critic_blocks: 2
+actor_width: 256
+actor_blocks: 1
+num_quantiles: 100
+optimism: 1.0               # exploration actor: Q + optimism * |Q1 - Q2| / 2 (0 disables)
+kl_coef: 1.0

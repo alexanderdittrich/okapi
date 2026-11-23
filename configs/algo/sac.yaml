@@ -1,0 +1,21 @@
+# @package _global_
+# SAC (okapi.sac.SACConfig). Defaults: MuJoCo Playground's Brax SAC settings.
+algo: sac
+num_envs: 128
+total_timesteps: 10_000_000
+buffer_size: 4_194_304      # transitions, split evenly over environments
+batch_size: 512
+updates_per_step: 8         # gradient updates per environment step (of all envs)
+learning_starts: 8192       # random-action transitions before learning
+learning_rate: 1.0e-3
+max_grad_norm: null
+gamma: 0.99
+n_step: 1
+tau: 0.005
+init_alpha: 1.0
+target_entropy: null        # null: -action_size / 2
+reward_scaling: 1.0
+actor_hidden_sizes: [256, 256]
+critic_hidden_sizes: [256, 256]
+activation: relu
+critic_layer_norm: true

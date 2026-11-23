@@ -1,0 +1,24 @@
+# @package _global_
+# SimbaV2 (okapi.simbav2.SimbaV2Config): SAC with hyperspherical networks and a categorical critic.
+algo: simbav2
+num_envs: 128
+total_timesteps: 10_000_000
+buffer_size: 4_194_304
+batch_size: 512
+updates_per_step: 8
+learning_starts: 8192
+learning_rate: 1.0e-4
+max_grad_norm: null
+gamma: 0.99
+n_step: 1
+tau: 0.005
+init_alpha: 0.01
+target_entropy: null
+reward_scaling: 1.0
+critic_width: 512
+critic_blocks: 2
+actor_width: 128
+actor_blocks: 1
+num_atoms: 101
+v_max: 5.0
+normalize_rewards: true     # divide rewards by the running std of the discounted return
